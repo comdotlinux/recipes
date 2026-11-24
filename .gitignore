@@ -1,0 +1,29 @@
+# Public repo: nothing secret may ever be committed.
+.secrets
+.env
+.env.*
+.dev.vars
+.dev.vars.*
+*.jks
+*.keystore
+*.p8
+*.p12
+*.mobileprovision
+local.properties
+google-services.json
+GoogleService-Info.plist
+
+# Tooling state
+.omc/
+.claude/settings.local.json
+.wrangler/
+node_modules/
+
+# Build output
+.gradle/
+.kotlin/
+build/
+xcuserdata/
+*.xcuserstate
+.idea/
+.DS_Store
