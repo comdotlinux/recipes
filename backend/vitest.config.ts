@@ -1,0 +1,22 @@
+import { cloudflareTest } from "@cloudflare/vitest-plugin";
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+	plugins: [
+		cloudflareTest({
+			// Test entry = local entry plus the S11 spike object; env "local" has no account-bound bindings.
+			main: "./test/worker.ts",
+			wrangler: { configPath: "./wrangler.jsonc", environment: "local" },
+			remoteBindings: false,
+			miniflare: { durableObjects: { SPIKE_DO: { className: "SpikeDO", useSQLite: true } } },
+		}),
+	],
+	test: {
+		coverage: {
+			provider: "istanbul",
+			include: ["src/**"],
+			reporter: ["text", "lcov"],
+			thresholds: { lines: 85 },
+		},
+	},
+});
