@@ -1,4 +1,4 @@
-rootProject.name = "recipe-box"
+rootProject.name = "recipes"
 
 pluginManagement {
     repositories {

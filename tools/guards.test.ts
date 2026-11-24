@@ -24,7 +24,7 @@ function fixture(files: Record<string, string>): string {
   return root;
 }
 
-const THEME = "shared/src/commonMain/kotlin/app/recipebox/ui/theme/Theme.kt";
+const THEME = "shared/src/commonMain/kotlin/de/munichtech/recipes/ui/theme/Theme.kt";
 const RES = "shared/src/commonMain/composeResources";
 
 describe("gradients", () => {
@@ -63,11 +63,11 @@ describe("purple hue", () => {
     expect(checkPurple(fixture({})).status).toBe("pass");
   });
   test("ignores test source sets", () => {
-    const r = checkPurple(fixture({ "shared/src/commonTest/kotlin/app/recipebox/ui/theme/T.kt": "val p = Color(0xFF8000FF)" }));
+    const r = checkPurple(fixture({ "shared/src/commonTest/kotlin/de/munichtech/recipes/ui/theme/T.kt": "val p = Color(0xFF8000FF)" }));
     expect(r.status).toBe("pass");
   });
   test("catches a literal in any main screen file", () => {
-    const r = checkPurple(fixture({ "androidApp/src/main/kotlin/app/recipebox/ui/list/List.kt": "val p = Color(0xFFFEF7FF)" }));
+    const r = checkPurple(fixture({ "androidApp/src/main/kotlin/de/munichtech/recipes/ui/list/List.kt": "val p = Color(0xFFFEF7FF)" }));
     expect(r.status).toBe("fail");
   });
   test.each([

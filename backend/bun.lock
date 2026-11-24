@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "recipe-box-backend",
+      "name": "recipes-backend",
       "dependencies": {
         "hono": "4.13.21",
       },

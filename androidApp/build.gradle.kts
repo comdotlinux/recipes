@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "app.recipebox.android"
+    namespace = "de.munichtech.recipes.android"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
 
     defaultConfig {

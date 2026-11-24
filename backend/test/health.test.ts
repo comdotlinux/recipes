@@ -39,6 +39,6 @@ describe("static assets", () => {
 	it("serves public/index.html through the ASSETS binding", async () => {
 		const res = await env.ASSETS.fetch("https://example.com/");
 		expect(res.status).toBe(200);
-		expect(await res.text()).toContain("<title>Recipe Box</title>");
+		expect(await res.text()).toContain("<title>Recipes</title>");
 	});
 });
