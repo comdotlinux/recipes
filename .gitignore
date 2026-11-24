@@ -13,6 +13,9 @@ local.properties
 google-services.json
 GoogleService-Info.plist
 
+# Owner's private checklist
+OWNER-TODO.md
+
 # Tooling state
 .omc/
 .claude/settings.local.json
@@ -23,6 +26,8 @@ node_modules/
 .gradle/
 .kotlin/
 build/
+dist/
+coverage/
 xcuserdata/
 *.xcuserstate
 .idea/
