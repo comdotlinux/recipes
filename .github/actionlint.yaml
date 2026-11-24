@@ -1,0 +1,6 @@
+# actionlint 1.7.12 (latest release, 2026-03-30) predates the GitHub-hosted
+# `ubuntu-26.04` label (listed in github.com/actions/runner-images). Declare it
+# here until an actionlint release knows it, then remove this file.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
