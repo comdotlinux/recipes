@@ -5,7 +5,7 @@ bun = "1.4.5"
 # Runtime for two things only (spike S1): the `cf` CLI (its bin starts with `#!/usr/bin/env node`)
 # and `wrangler dev` (under bun every request returns 503, oven-sh/bun#39247). bun stays the package manager.
 node = "24.22.3"
-# JDK that runs Gradle. Gradle 9.7.0 runs on 17 to 26, AGP 9.3 needs 17 or newer, Kotlin 2.4 targets up to Java 26.
+# JDK that runs Gradle. Java 25 is fixed by the owner; never switch versions. Gradle 9.7.0 runs on 17 to 26, AGP 9.3 needs 17 or newer, Kotlin 2.4 targets up to Java 26.
 # Android bytecode target is set separately in Gradle (17).
 java = "temurin-25.0.5.1+2.0.LTS"
 maestro = "cli-2.12.1"
