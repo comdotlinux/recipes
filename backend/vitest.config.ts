@@ -8,7 +8,14 @@ export default defineConfig({
 			main: "./test/worker.ts",
 			wrangler: { configPath: "./wrangler.jsonc", environment: "local" },
 			remoteBindings: false,
-			miniflare: { durableObjects: { SPIKE_DO: { className: "SpikeDO", useSQLite: true } } },
+			miniflare: {
+				durableObjects: { SPIKE_DO: { className: "SpikeDO", useSQLite: true } },
+				// Test-only secret values; they protect nothing.
+				bindings: {
+					USER_ID_PEPPER: "test-pepper-not-a-secret",
+					SERVER_KEY: "test-server-key-not-a-secret",
+				},
+			},
 		}),
 	],
 	test: {

@@ -1,0 +1,7 @@
+# Copy to .dev.vars (git-ignored) for `bun run dev`. Values are never committed.
+# env.local already sets Cloudflare's public Turnstile test secret in wrangler.jsonc.
+# SERVER_KEY_PREVIOUS is optional: set it only during a SERVER_KEY rotation (the old key).
+USER_ID_PEPPER=
+SERVER_KEY=
+TURNSTILE_SECRET=
+SERVER_KEY_PREVIOUS=

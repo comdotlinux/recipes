@@ -1,9 +1,7 @@
-import { Hono } from "hono";
+import { createApi } from "./api";
 
 export { UserDO } from "./user-do";
 
-export const app = new Hono<{ Bindings: Env }>();
-
-app.get("/v1/health", (c) => c.json({ status: "ok", version: 1 }));
+export const app = createApi();
 
 export default app;

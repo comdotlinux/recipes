@@ -1,14 +1,20 @@
 // Deploy targets are the environments (Worker names recipes-<env>). The top level only supplies
 // inheritable defaults. Its dataset and rate-limit namespace ids (9xxx) are its own, so a bare
-// `wrangler deploy` cannot write to production resources. Bindings are not inheritable, so each environment repeats them.
+// `wrangler deploy` cannot write to production resources. APPLE_AUDIENCES / GOOGLE_AUDIENCES are public client ids
+// (comma-separated); empty accepts no token until the owner fills them in. DO_JURISDICTION is "eu" wherever the Worker
+// is deployed; local workerd does not implement jurisdictions, so env.local leaves it empty. TURNSTILE_SITE_KEY is public;
+// env.local uses Cloudflare's public always-pass test site key and test secret
+// (https://developers.cloudflare.com/turnstile/troubleshooting/testing/); only env.local may contain them. Bindings are not inheritable, so each environment repeats them.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "recipes",
   "main": "src/index.ts",
   "compatibility_date": "2026-11-23",
-  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/v1/*"] },
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/v1/*", "/turnstile.html"] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["UserDO"] }],
   "durable_objects": { "bindings": [{ "name": "USER_DO", "class_name": "UserDO" }] },
+  "secrets": { "required": ["USER_ID_PEPPER", "SERVER_KEY", "TURNSTILE_SECRET"] },
+  "vars": { "APPLE_AUDIENCES": "", "GOOGLE_AUDIENCES": "", "DO_JURISDICTION": "eu", "TURNSTILE_SITE_KEY": "" },
   "ai": { "binding": "AI" },
   // namespace_id values are account-scoped integers chosen by us, not secrets.
   "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "recipes_metrics_toplevel" }],
@@ -24,7 +30,22 @@
     // because Workers AI always calls the account; a local AI stub is added when M2 needs one.
     "local": {
       "main": "src/index.local.ts",
+      // Explicit, not inherited: this entry must never get a public URL (it also refuses non-local hosts).
+      "workers_dev": false,
+      "preview_urls": false,
+      "routes": [],
       "durable_objects": { "bindings": [{ "name": "USER_DO", "class_name": "UserDO" }] },
+      "secrets": { "required": [] },
+      "vars": {
+        "APPLE_AUDIENCES": "local.test.apple",
+        "GOOGLE_AUDIENCES": "local.test.google",
+        "DO_JURISDICTION": "",
+        "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
+        "TURNSTILE_SECRET": "1x0000000000000000000000000000000AA",
+        // Development values, not secrets: env.local is never deployed. Tests check they stay out of the other environments.
+        "USER_ID_PEPPER": "dev-only-user-id-pepper",
+        "SERVER_KEY": "dev-only-server-key"
+      },
       "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "recipes_metrics_local" }],
       "ratelimits": [
         { "name": "RL_IP", "namespace_id": "8001", "simple": { "limit": 20, "period": 60 } },
@@ -36,6 +57,8 @@
       "workers_dev": true,
       "preview_urls": true,
       "durable_objects": { "bindings": [{ "name": "USER_DO", "class_name": "UserDO" }] },
+      "secrets": { "required": ["USER_ID_PEPPER", "SERVER_KEY", "TURNSTILE_SECRET"] },
+      "vars": { "APPLE_AUDIENCES": "", "GOOGLE_AUDIENCES": "", "DO_JURISDICTION": "eu", "TURNSTILE_SITE_KEY": "" },
       "ai": { "binding": "AI" },
       "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "recipes_metrics_staging" }],
       "ratelimits": [
@@ -48,6 +71,8 @@
       "workers_dev": false,
       "preview_urls": false,
       "durable_objects": { "bindings": [{ "name": "USER_DO", "class_name": "UserDO" }] },
+      "secrets": { "required": ["USER_ID_PEPPER", "SERVER_KEY", "TURNSTILE_SECRET"] },
+      "vars": { "APPLE_AUDIENCES": "", "GOOGLE_AUDIENCES": "", "DO_JURISDICTION": "eu", "TURNSTILE_SITE_KEY": "" },
       "ai": { "binding": "AI" },
       "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "recipes_metrics" }],
       "ratelimits": [

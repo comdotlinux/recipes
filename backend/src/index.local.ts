@@ -1,9 +1,19 @@
 // Local dev and test entry only (wrangler env "local"). The production entry never imports src/testing/.
-import { Hono } from "hono";
-import { app } from "./index";
-import { testIdp } from "./testing/test-idp";
+import { createApi } from "./api";
+import { verifyTestIdToken } from "./testing/test-idp";
 
-export { UserDO } from "./index";
+export { UserDO } from "./user-do";
 
-// A separate app, so the production app object stays without the test route.
-export default new Hono<{ Bindings: Env }>().route("/", testIdp).route("/", app);
+const api = createApi({ testProvider: verifyTestIdToken });
+
+// Should this entry ever be deployed by mistake, it answers nothing outside the machine or the Android emulator's host alias.
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "10.0.2.2"]);
+
+export default {
+	fetch(request, env, ctx) {
+		if (!LOCAL_HOSTS.has(new URL(request.url).hostname)) {
+			return Response.json({ error: { code: "not_found", message: "local entry serves local hosts only" } }, { status: 404 });
+		}
+		return api.fetch(request, env, ctx);
+	},
+} satisfies ExportedHandler<Env>;
