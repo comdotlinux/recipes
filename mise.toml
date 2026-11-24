@@ -1,3 +1,18 @@
 [tools]
-bun = "latest"
-cf = "latest"
+bun = "1.4.5"
+# Cloudflare CLI (beta). Plain `cf` in the mise registry is the Cloud Foundry CLI.
+"npm:cf" = "1.0.0-rc.4"
+# Runtime for two things only (spike S1): the `cf` CLI (its bin starts with `#!/usr/bin/env node`)
+# and `wrangler dev` (under bun every request returns 503, oven-sh/bun#39247). bun stays the package manager.
+node = "24.22.3"
+# JDK that runs Gradle. Gradle 9.7.0 runs on 17 to 26, AGP 9.3 needs 17 or newer, Kotlin 2.4 targets up to Java 26.
+# Android bytecode target is set separately in Gradle (17).
+java = "temurin-25.0.5.1+2.0.LTS"
+maestro = "cli-2.12.1"
+gitleaks = "8.30.1"
+actionlint = "1.7.12"
+
+[env]
+# The mise android-sdk plugin installs only cmdline-tools, so reuse an existing SDK.
+# Keeps ANDROID_HOME when already set (CI runners), else the Android Studio default.
+ANDROID_HOME = "{{ get_env(name='ANDROID_HOME', default=env.HOME ~ '/Android/Sdk') }}"

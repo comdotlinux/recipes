@@ -1,0 +1,42 @@
+# Every version is verified at its primary source; see docs/versions/client.md.
+[versions]
+kotlin = "2.4.21"
+agp = "9.3.1"
+compose-multiplatform = "1.12.2"
+compose-material3 = "1.9.0"
+kotlinx-serialization = "1.13.0"
+androidx-activity = "1.13.0"
+# Jetpack Compose UI release that Compose Multiplatform 1.12.2 is based on.
+androidx-compose-ui = "1.12.1"
+robolectric = "4.18.1"
+roborazzi = "1.79.0"
+kover = "0.9.11"
+junit = "4.13.2"
+# Compose 1.12.1 (inside Compose Multiplatform 1.12.2) requires compileSdk 37 in its AAR metadata.
+android-compileSdk = "37"
+android-targetSdk = "36"
+android-minSdk = "24"
+
+[libraries]
+compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "compose-multiplatform" }
+compose-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "compose-multiplatform" }
+compose-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "compose-multiplatform" }
+compose-ui-test = { module = "org.jetbrains.compose.ui:ui-test", version.ref = "compose-multiplatform" }
+compose-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "compose-material3" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
+androidx-compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest", version.ref = "androidx-compose-ui" }
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+roborazzi = { module = "io.github.takahirom.roborazzi:roborazzi", version.ref = "roborazzi" }
+roborazzi-compose = { module = "io.github.takahirom.roborazzi:roborazzi-compose", version.ref = "roborazzi" }
+junit = { module = "junit:junit", version.ref = "junit" }
+
+[plugins]
+kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "compose-multiplatform" }
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-kmp-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
+roborazzi = { id = "io.github.takahirom.roborazzi", version.ref = "roborazzi" }
+kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }

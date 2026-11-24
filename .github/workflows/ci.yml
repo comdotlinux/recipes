@@ -1,0 +1,152 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  MISE_VERSION: "2026.11.10"
+
+jobs:
+  backend:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Full `mise install` from mise.toml on a clean runner (AC1).
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
+        with:
+          version: ${{ env.MISE_VERSION }}
+      - name: Assert toolchain (AC1)
+        run: |
+          set -euo pipefail
+          cf --version
+          # Plain `cf` can also be the Cloud Foundry CLI; Cloudflare's names itself in its help text.
+          help="$(cf --help 2>&1)"
+          grep -q "The Cloudflare CLI" <<<"${help}" || { echo "::error::cf is not the Cloudflare CLI"; exit 1; }
+          expected="$(mise current bun)"
+          actual="$(bun --version)"
+          echo "bun ${actual} (mise.toml pins ${expected})"
+          [ "${actual}" = "${expected}" ]
+      - name: Install
+        working-directory: backend
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        working-directory: backend
+        run: bun run typecheck
+      - name: Test with coverage
+        working-directory: backend
+        run: bun run test --coverage
+      - name: Production bundle (wrangler deploy --dry-run)
+        working-directory: backend
+        run: bun run build:check
+      - name: Test-only marker absent from production bundle (AC30)
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          if [ ! -d dist ] || [ -z "$(ls -A dist)" ]; then echo "::error::backend/dist is missing or empty"; exit 1; fi
+          if grep -rl "__TEST_IDP__" dist; then
+            echo "::error::__TEST_IDP__ found in the production bundle"
+            exit 1
+          fi
+          echo "dist contains no __TEST_IDP__"
+
+  app:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: java
+      # Basic caching is the MIT-licensed provider; it also validates the Gradle wrapper.
+      - uses: gradle/actions/setup-gradle@7296c772c13d12d9871528814b51fb2143c138ef # v6.4.1
+        with:
+          cache-provider: basic
+      - name: Check, coverage and debug build
+        run: ./gradlew check koverVerify :androidApp:assembleDebug
+      - name: Upload reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: app-reports
+          path: |
+            **/build/reports/
+            **/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  ios:
+    # macos-26 is the arm64 macOS 26 image; its default Xcode is 26.6 (Kotlin 2.4 needs 26.4+).
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: java
+      - uses: gradle/actions/setup-gradle@7296c772c13d12d9871528814b51fb2143c138ef # v6.4.1
+        with:
+          cache-provider: basic
+      - name: Assert Xcode 26.4 or newer
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          v="$(xcodebuild -version | awk 'NR==1{print $2}')"
+          major="${v%%.*}"; rest="${v#*.}"; minor="${rest%%.*}"
+          if [ "${major}" -lt 26 ] || { [ "${major}" -eq 26 ] && [ "${minor}" -lt 4 ]; }; then
+            echo "::error::Xcode ${v} is older than 26.4"
+            exit 1
+          fi
+      - name: Shared iOS simulator tests
+        run: ./gradlew :shared:iosSimulatorArm64Test
+      - name: iOS simulator build
+        run: xcodebuild -project iosApp/iosApp.xcodeproj -scheme iosApp -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' build
+      - name: Upload reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-reports
+          path: |
+            **/build/reports/
+            **/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  guards:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # gitleaks scans the full history
+          persist-credentials: false
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: bun gitleaks actionlint
+      # Lints every workflow with .github/actionlint.yaml; shellcheck from the runner image checks run: scripts.
+      - name: actionlint
+        run: actionlint -verbose
+      - name: Guards
+        run: bun run tools/guards.ts
+      - name: Guard tests
+        run: bun test ./tools
+      - name: gitleaks (full history)
+        run: gitleaks git --redact --verbose --exit-code 1 .

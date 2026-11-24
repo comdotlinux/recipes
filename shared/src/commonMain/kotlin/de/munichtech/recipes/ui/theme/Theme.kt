@@ -1,0 +1,118 @@
+package de.munichtech.recipes.ui.theme
+
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
+
+// Owner rules: flat colours only, no hue between 250 and 320 degrees, text on background at least 4.5:1.
+// The full ColorScheme constructor is used on purpose: it has no defaults, so the purple Material
+// baseline cannot leak in through a forgotten role.
+
+val LightColors = ColorScheme(
+    primary = Color(0xFF2F6B3A),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFB6F0BC),
+    onPrimaryContainer = Color(0xFF00210A),
+    inversePrimary = Color(0xFF9BD4A1),
+    secondary = Color(0xFF52634F),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFD5E8CF),
+    onSecondaryContainer = Color(0xFF101F0F),
+    tertiary = Color(0xFF8A4F24),
+    onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFFFFDCC4),
+    onTertiaryContainer = Color(0xFF2F1400),
+    background = Color(0xFFFCFAF5),
+    onBackground = Color(0xFF1C1B17),
+    surface = Color(0xFFFCFAF5),
+    onSurface = Color(0xFF1C1B17),
+    surfaceVariant = Color(0xFFE4E2D8),
+    onSurfaceVariant = Color(0xFF47473F),
+    surfaceTint = Color(0xFF2F6B3A),
+    inverseSurface = Color(0xFF31302B),
+    inverseOnSurface = Color(0xFFF4F0E8),
+    error = Color(0xFFB3261E),
+    onError = Color(0xFFFFFFFF),
+    errorContainer = Color(0xFFF9DEDC),
+    onErrorContainer = Color(0xFF410E0B),
+    outline = Color(0xFF77776D),
+    outlineVariant = Color(0xFFC8C7BC),
+    scrim = Color(0xFF000000),
+    surfaceBright = Color(0xFFFCFAF5),
+    surfaceDim = Color(0xFFDDDAD2),
+    surfaceContainer = Color(0xFFF1EEE8),
+    surfaceContainerHigh = Color(0xFFEBE8E2),
+    surfaceContainerHighest = Color(0xFFE5E2DC),
+    surfaceContainerLow = Color(0xFFF7F4EE),
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    primaryFixed = Color(0xFFB6F0BC),
+    primaryFixedDim = Color(0xFF9BD4A1),
+    onPrimaryFixed = Color(0xFF00210A),
+    onPrimaryFixedVariant = Color(0xFF155228),
+    secondaryFixed = Color(0xFFD5E8CF),
+    secondaryFixedDim = Color(0xFFB9CCB4),
+    onSecondaryFixed = Color(0xFF101F0F),
+    onSecondaryFixedVariant = Color(0xFF3B4B39),
+    tertiaryFixed = Color(0xFFFFDCC4),
+    tertiaryFixedDim = Color(0xFFFFB781),
+    onTertiaryFixed = Color(0xFF2F1400),
+    onTertiaryFixedVariant = Color(0xFF6D390E),
+)
+
+val DarkColors = ColorScheme(
+    primary = Color(0xFF9BD4A1),
+    onPrimary = Color(0xFF003915),
+    primaryContainer = Color(0xFF155228),
+    onPrimaryContainer = Color(0xFFB6F0BC),
+    inversePrimary = Color(0xFF2F6B3A),
+    secondary = Color(0xFFB9CCB4),
+    onSecondary = Color(0xFF253423),
+    secondaryContainer = Color(0xFF3B4B39),
+    onSecondaryContainer = Color(0xFFD5E8CF),
+    tertiary = Color(0xFFFFB781),
+    onTertiary = Color(0xFF4E2600),
+    tertiaryContainer = Color(0xFF6D390E),
+    onTertiaryContainer = Color(0xFFFFDCC4),
+    background = Color(0xFF14130F),
+    onBackground = Color(0xFFE6E2DA),
+    surface = Color(0xFF14130F),
+    onSurface = Color(0xFFE6E2DA),
+    surfaceVariant = Color(0xFF47473F),
+    onSurfaceVariant = Color(0xFFC8C7BC),
+    surfaceTint = Color(0xFF9BD4A1),
+    inverseSurface = Color(0xFFE6E2DA),
+    inverseOnSurface = Color(0xFF31302B),
+    error = Color(0xFFF2B8B5),
+    onError = Color(0xFF601410),
+    errorContainer = Color(0xFF8C1D18),
+    onErrorContainer = Color(0xFFF9DEDC),
+    outline = Color(0xFF919186),
+    outlineVariant = Color(0xFF47473F),
+    scrim = Color(0xFF000000),
+    surfaceBright = Color(0xFF3A3934),
+    surfaceDim = Color(0xFF14130F),
+    surfaceContainer = Color(0xFF20201B),
+    surfaceContainerHigh = Color(0xFF2B2A25),
+    surfaceContainerHighest = Color(0xFF36352F),
+    surfaceContainerLow = Color(0xFF1C1B17),
+    surfaceContainerLowest = Color(0xFF0F0E0A),
+    primaryFixed = Color(0xFFB6F0BC),
+    primaryFixedDim = Color(0xFF9BD4A1),
+    onPrimaryFixed = Color(0xFF00210A),
+    onPrimaryFixedVariant = Color(0xFF155228),
+    secondaryFixed = Color(0xFFD5E8CF),
+    secondaryFixedDim = Color(0xFFB9CCB4),
+    onSecondaryFixed = Color(0xFF101F0F),
+    onSecondaryFixedVariant = Color(0xFF3B4B39),
+    tertiaryFixed = Color(0xFFFFDCC4),
+    tertiaryFixedDim = Color(0xFFFFB781),
+    onTertiaryFixed = Color(0xFF2F1400),
+    onTertiaryFixedVariant = Color(0xFF6D390E),
+)
+
+@Composable
+fun RecipesTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
+    MaterialTheme(colorScheme = if (darkTheme) DarkColors else LightColors, content = content)
+}
