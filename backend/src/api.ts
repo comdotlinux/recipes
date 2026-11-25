@@ -83,6 +83,7 @@ type UserObject = Pick<
 	| "previewShare"
 	| "acceptShare"
 	| "reportShare"
+	| "pdf"
 	| "report"
 	| "refreshFromClient"
 	| "entitlementChanged"
@@ -451,6 +452,12 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 			const share = await sharedBy(c, c.req.param("token")!);
 			return share ? o.acceptShare(a.secretHash, share.ownerId, share.shareId) : SHARE_NOT_FOUND;
 		}),
+	);
+
+	// docs/api.md "Milestone M5": the recipe as a PDF.
+	app.get(
+		"/v1/recipes/:id/pdf",
+		authed(async (o, a, c) => (ids(c, "id") ? o.pdf(a.secretHash, c.req.param("id")!) : error(400, "invalid_id", "id must be a lowercase UUID"))),
 	);
 
 	const Reason = z.enum(["wrong_content", "offensive", "other"]);

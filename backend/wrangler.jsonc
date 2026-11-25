@@ -20,6 +20,8 @@
   "vars": { "APPLE_AUDIENCES": "", "GOOGLE_AUDIENCES": "", "DO_JURISDICTION": "eu", "TURNSTILE_SITE_KEY": "",
     "REVENUECAT_API_BASE": "https://api.revenuecat.com/v1", "REVENUECAT_ENTITLEMENT": "recipes_pro" },
   "ai": { "binding": "AI" },
+  // Browser Run Quick Actions for GET /recipes/:id/pdf (src/pdf.ts); env.local has none, so the route answers 503 there.
+  "browser": { "binding": "BROWSER" },
   // namespace_id values are account-scoped integers chosen by us, not secrets.
   "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "recipes_metrics_toplevel" }],
   "ratelimits": [
@@ -70,6 +72,7 @@
       "vars": { "APPLE_AUDIENCES": "", "GOOGLE_AUDIENCES": "", "DO_JURISDICTION": "eu", "TURNSTILE_SITE_KEY": "",
         "REVENUECAT_API_BASE": "https://api.revenuecat.com/v1", "REVENUECAT_ENTITLEMENT": "recipes_pro" },
       "ai": { "binding": "AI" },
+      "browser": { "binding": "BROWSER" },
       "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "recipes_metrics_staging" }],
       "ratelimits": [
         { "name": "RL_IP", "namespace_id": "2001", "simple": { "limit": 20, "period": 60 } },
@@ -86,6 +89,7 @@
       "vars": { "APPLE_AUDIENCES": "", "GOOGLE_AUDIENCES": "", "DO_JURISDICTION": "eu", "TURNSTILE_SITE_KEY": "",
         "REVENUECAT_API_BASE": "https://api.revenuecat.com/v1", "REVENUECAT_ENTITLEMENT": "recipes_pro" },
       "ai": { "binding": "AI" },
+      "browser": { "binding": "BROWSER" },
       "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "recipes_metrics" }],
       "ratelimits": [
         { "name": "RL_IP", "namespace_id": "1001", "simple": { "limit": 20, "period": 60 } },

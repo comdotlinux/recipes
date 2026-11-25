@@ -5,6 +5,7 @@ import { systemEvent, userEvent } from "./metrics";
 import { MAX_IMAGES_PER_RECIPE, MAX_RECIPES, RecipeInput, type TranslationView, isoTime, stripControls, toRecipe } from "./recipes";
 import { SHARES_PER_DAY, SHARE_RECIPIENT_LIMIT, SHARE_TTL_MS, derivedId, newShareId, newShareToken, reportReference } from "./share";
 import { sha256Hex } from "./auth/encoding";
+import { PDF_PER_DAY, pdfHtml, renderPdf } from "./pdf";
 import { migrate, rowCounts, schemaVersion } from "./storage/migrations";
 import { armAlarm, runDueTasks, schedule } from "./storage/tasks";
 import { fetchPage } from "./ai/fetch-url";
@@ -887,6 +888,66 @@ export class UserDO extends DurableObject<Env> {
 				await this.scheduleExpiry(now + REPORT_DAYS * DAY_MS);
 			}
 			return { status: 204 };
+		}, true);
+	}
+
+	// ---- PDF (docs/api.md Milestone M5) ----
+
+	/** The Browser Run binding; tests replace it, env.local has none. */
+	protected browser(): Pick<BrowserRun, "quickAction"> | undefined {
+		return this.env.BROWSER;
+	}
+
+	private pdfsToday(now: number): number {
+		return this.sql.exec<{ count: number }>("SELECT count FROM daily_counters WHERE day = ? AND key = 'pdf_rendered'", day(now)).toArray()[0]?.count ?? 0;
+	}
+
+	/** GET /recipes/:id/pdf: free, PDF_PER_DAY per user and UTC day; a failed render does not count. */
+	pdf(secretHash: string, recipeId: string): Promise<Result> {
+		return this.run("pdf", secretHash, async (now) => {
+			const row = this.liveRecipe(recipeId);
+			if (!row) return error(404, "not_found", "recipe not found");
+			const browser = this.browser();
+			if (!browser) return error(503, "pdf_unavailable", "PDF rendering is not configured in this environment");
+			if (this.pdfsToday(now) >= PDF_PER_DAY) {
+				this.event({ event: "pdf", outcome: "limited" });
+				return error(429, "pdf_limit", `at most ${PDF_PER_DAY} PDFs a day`);
+			}
+			// A global key as well (plan 4.8), so the account-wide render budget has a ceiling.
+			if (!(await this.env.RL_GLOBAL.limit({ key: "pdf" })).success) {
+				systemEvent(this.env, { event: "rate_limited", route: "pdf" });
+				return error(429, "rate_limited", "PDF rendering is busy; try again later");
+			}
+			// Counted before the render, so parallel requests cannot pass the daily limit; given back if the render fails.
+			if (this.pdfsToday(now) >= PDF_PER_DAY) return error(429, "pdf_limit", `at most ${PDF_PER_DAY} PDFs a day`);
+			const count = (delta: number) =>
+				this.sql.exec(
+					"INSERT INTO daily_counters (day, key, count) VALUES (?, 'pdf_rendered', ?) ON CONFLICT (day, key) DO UPDATE SET count = count + excluded.count",
+					day(now),
+					delta,
+				);
+			count(1);
+			const recipe = JSON.parse(row.json!) as RecipeInput;
+			const pictures = recipe.imageIds.flatMap((id) =>
+				this.sql.exec<{ mime: string; bytes: ArrayBuffer }>("SELECT mime, bytes FROM images WHERE id = ? AND recipe_id = ?", id, recipeId).toArray(),
+			);
+			const bytes = await renderPdf(browser, pdfHtml(recipe, pictures));
+			if (!bytes) {
+				count(-1);
+				this.event({ event: "pdf", outcome: "unavailable" });
+				return error(503, "pdf_unavailable", "the PDF could not be made; try again later");
+			}
+			this.event({ event: "pdf", outcome: "rendered" });
+			return {
+				status: 200,
+				bytes,
+				headers: {
+					"content-type": "application/pdf",
+					"content-disposition": 'attachment; filename="recipe.pdf"',
+					"cache-control": "private, no-store",
+					"x-content-type-options": "nosniff",
+				},
+			};
 		}, true);
 	}
 

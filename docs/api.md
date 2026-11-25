@@ -334,6 +334,15 @@ Rules:
 - A report of a shared recipe revokes the link at once. Reporting the same link again answers 204 and changes nothing.
 - The response of `POST /recipes/:id/shares` is the only time the app sees the token; the owner keeps `shareId` to revoke the link. There is no list of an owner's links in this milestone.
 
+### PDF
+
+| Route | Request | Success | Errors |
+|-------|---------|---------|--------|
+| `GET /recipes/:id/pdf` | none | 200 `application/pdf` bytes, `Content-Disposition: attachment; filename="recipe.pdf"`, `Cache-Control: private, no-store` | 400 `invalid_id`; 404 (not this user's recipe, or deleted); 429 `pdf_limit` (20 PDFs per UTC day); 429 `rate_limited`; 503 `pdf_unavailable` (the rendering service failed; nothing is counted; the local environment always answers this) |
+
+- Free for every signed-in user (no subscription), 20 per user and UTC day; a failed render does not count.
+- The PDF shows title, servings and times, the recipe's pictures, description, ingredients (with group headings), steps and tags, as plain text. Headings in the PDF are English for now.
+
 ### App links and the landing page
 
 Served by the Worker, not under `/v1`:
