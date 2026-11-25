@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
 import kotlin.uuid.Uuid
 
 /**
@@ -15,6 +16,10 @@ import kotlin.uuid.Uuid
  * Nothing is sent to an import route unless [consent] is given for its current version. On a 401 with the
  * current token, the job ends locally and [onUnauthorized] runs; sign-out calls [clearLocal]. A 5xx answer
  * counts as "server not reachable right now", as in [DefaultRecipeRepository].
+ *
+ * M4: the open job may be a translation (kind `translation`): the server allows one open job per user, so
+ * [activeJob] holds either kind and [resume] polls both. A translation that ends as `done` runs [onTranslated]
+ * (a recipe sync, which brings the result) and is then acknowledged here, as there is nothing to review.
  */
 class DefaultImportRepository(
     private val api: Api,
@@ -23,11 +28,20 @@ class DefaultImportRepository(
     private val recognizer: TextRecognizer,
     private val currentToken: () -> String? = { null },
     private val delay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
+    private val onTranslated: suspend () -> Unit = {},
     private val onUnauthorized: suspend () -> Unit,
 ) : ImportRepository {
-    private var generation = 0
+    /** Raised by [clearLocal]; a start that sees it change while its request ran belongs to the old session. */
+    internal var generation = 0
+        private set
+    private val polling = Mutex()
     private val _activeJob = MutableStateFlow(
-        cache.readSettings().let { s -> s.importJobId?.let { ImportJobState(it, s.importJobKind.orEmpty(), null, false) } },
+        cache.readSettings().let { s ->
+            s.importJobId?.let { id ->
+                val ref = s.translationJobs.lastOrNull { it.jobId == id }
+                ImportJobState(id, s.importJobKind.orEmpty(), null, false, ref?.recipeId, ref?.language)
+            }
+        },
     )
     override val activeJob: StateFlow<ImportJobState?> = _activeJob.asStateFlow()
 
@@ -75,12 +89,28 @@ class DefaultImportRepository(
             ?: LocalRead.Unreadable
 
     override suspend fun resume() {
+        // One poller is enough: the list and the detail screen may both ask; the second one just reads activeJob.
+        if (!polling.tryLock()) return
+        try {
+            poll()
+        } finally {
+            polling.unlock()
+        }
+    }
+
+    private suspend fun poll() {
         while (true) {
             val job = _activeJob.value ?: return
             if (job.outcome != null) return
             val token = currentToken()
             val next = when (val result = api.job(job.jobId)) {
-                is ApiResult.Ok -> job.copy(kind = result.value.kind, outcome = outcomeOf(result.value), offline = false)
+                is ApiResult.Ok -> job.copy(
+                    kind = result.value.kind,
+                    outcome = outcomeOf(result.value),
+                    offline = false,
+                    recipeId = result.value.recipeId,
+                    language = result.value.language,
+                ).also { rememberTranslation(result.value) }
                 ApiResult.Offline -> job.copy(offline = true)
                 is ApiResult.Failure -> when {
                     result.status == 401 -> return unauthorized(token)
@@ -91,6 +121,10 @@ class DefaultImportRepository(
             }
             // Only the job that was polled: acknowledge or sign-out may have cleared it meanwhile.
             _activeJob.update { if (it?.jobId == job.jobId) next else it }
+            if (next.outcome == ImportOutcome.Translated) {
+                onTranslated()
+                acknowledge(job.jobId)
+            }
             if (next.outcome != null) return
             delay(POLL_INTERVAL_MS)
         }
@@ -132,12 +166,26 @@ class DefaultImportRepository(
         cache.updateSettings { it.copy(importJobId = openJobId, importJobKind = null) }
     }
 
-    private fun track(job: ImportJob) {
-        _activeJob.value = ImportJobState(job.id, job.kind, outcomeOf(job), offline = false)
+    /** Makes [job] the open job; also used by [DefaultTranslationRepository] for a started translation. */
+    internal fun track(job: ImportJob) {
+        _activeJob.value = ImportJobState(job.id, job.kind, outcomeOf(job), offline = false, job.recipeId, job.language)
         cache.updateSettings { it.copy(importJobId = job.id, importJobKind = job.kind) }
+        rememberTranslation(job)
     }
 
-    private suspend fun unauthorized(usedToken: String?) {
+    /** Keeps the newest job per recipe and language, so a report can name the job that made what is shown. */
+    private fun rememberTranslation(job: ImportJob) {
+        val recipeId = job.recipeId ?: return
+        val language = job.language ?: return
+        if (job.kind != TRANSLATION) return
+        val ref = TranslationJobRef(job.id, recipeId, language)
+        if (ref in cache.readSettings().translationJobs) return
+        cache.updateSettings { s ->
+            s.copy(translationJobs = (s.translationJobs.filterNot { it.recipeId == recipeId && it.language == language } + ref).takeLast(KNOWN_TRANSLATIONS))
+        }
+    }
+
+    internal suspend fun unauthorized(usedToken: String?) {
         if (usedToken != null && usedToken == currentToken()) {
             clearLocal()
             onUnauthorized()
@@ -146,6 +194,10 @@ class DefaultImportRepository(
 
     companion object {
         const val POLL_INTERVAL_MS = 2_000L
+        const val TRANSLATION = "translation"
+
+        /** Translation jobs remembered for reports; the server keeps a job 7 days, so older ones are useless anyway. */
+        const val KNOWN_TRANSLATIONS = 200
 
         /**
          * Recognised text shorter than this many characters (after trimming) is not trusted: the photo counts
@@ -160,7 +212,7 @@ class DefaultImportRepository(
         /** Null while the job is pending or running. A status this build does not know ends the job as failed. */
         fun outcomeOf(job: ImportJob): ImportOutcome? = when (job.status) {
             "pending", "running" -> null
-            "done" -> job.draft?.let { ImportOutcome.Done(it) } ?: ImportOutcome.Invalid
+            "done" -> if (job.kind == TRANSLATION) ImportOutcome.Translated else job.draft?.let { ImportOutcome.Done(it) } ?: ImportOutcome.Invalid
             "guard_block" -> ImportOutcome.GuardBlocked
             "no_recipe" -> ImportOutcome.NoRecipe
             "invalid" -> ImportOutcome.Invalid
