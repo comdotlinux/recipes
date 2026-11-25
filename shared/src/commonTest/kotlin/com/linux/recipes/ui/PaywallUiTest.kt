@@ -51,7 +51,7 @@ class PaywallUiTest : UiTest() {
     private fun ComposeUiTest.app() {
         val session = FakeSessionRepository(signedIn = true)
         val billing = DefaultBillingRepository(server.api(), store, session, CoroutineScope(Dispatchers.Unconfined)) {}
-        setContent {
+        setScreen {
             CompositionLocalProvider(LocalUriHandler provides uri) {
                 App(session, FakeRecipeRepository(listOf(shakshuka)), false, null, imports, FakeConsentRepository(), billing)
             }
