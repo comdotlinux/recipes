@@ -48,6 +48,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.linux.recipes.data.DefaultImportRepository
 import com.linux.recipes.data.ImportJobState
 import com.linux.recipes.data.ImportOutcome
 import com.linux.recipes.ui.components.AppMark
@@ -57,6 +58,7 @@ import com.linux.recipes.ui.edit.PictureActions
 import com.linux.recipes.ui.paywall.LocalBilling
 import com.linux.recipes.ui.paywall.Paywall
 import com.linux.recipes.ui.paywall.PaywallSheet
+import com.linux.recipes.ui.translate.TranslationJobCard
 import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.stringResource
 import recipes.shared.generated.resources.action_close
@@ -126,6 +128,8 @@ internal fun ImportStatus(vm: ImportViewModel, job: ImportJobState?, onReview: (
             }
         }
         vm.reading -> StatusCard(icon = null, message = stringResource(Res.string.import_reading_photo))
+        // M4: the one open job may be a translation; it has its own card and nothing to review.
+        job != null && job.kind == DefaultImportRepository.TRANSLATION -> TranslationJobCard(job, onDismiss = { vm.acknowledge(job.jobId) })
         job == null -> if (vm.starting) RunningCard()
         outcome == null -> if (job.offline) StatusCard(RecipeIcons.CloudOff, stringResource(Res.string.import_waiting_offline)) else RunningCard()
         outcome is ImportOutcome.Done -> StatusCard(
@@ -168,7 +172,7 @@ private fun ImportOutcome.message(): StringResource = when (this) {
     ImportOutcome.GuardBlocked -> Res.string.import_guard_blocked
     ImportOutcome.NoRecipe -> Res.string.import_no_recipe
     ImportOutcome.Invalid -> Res.string.import_invalid
-    ImportOutcome.Failed, is ImportOutcome.Done -> Res.string.import_failed
+    ImportOutcome.Failed, ImportOutcome.Translated, is ImportOutcome.Done -> Res.string.import_failed
 }
 
 @Composable
@@ -177,7 +181,7 @@ private fun RunningCard() = StatusCard(icon = null, message = stringResource(Res
 /** A tonal card: a leading icon (a spinner when [icon] is null), the message, an optional detail line and actions. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun StatusCard(
+internal fun StatusCard(
     icon: ImageVector?,
     message: String,
     detail: String? = null,

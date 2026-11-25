@@ -3,11 +3,18 @@ package com.linux.recipes
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
 import com.linux.recipes.data.BillingRepository
 import com.linux.recipes.data.ConsentRepository
 import com.linux.recipes.data.ImportRepository
 import com.linux.recipes.data.RecipeRepository
 import com.linux.recipes.data.SessionRepository
+import com.linux.recipes.data.TranslationRepository
+import com.linux.recipes.ui.theme.Appearance
+import com.linux.recipes.ui.theme.AppearanceStore
+import com.linux.recipes.ui.theme.LocalAppearance
+import com.linux.recipes.ui.theme.Palettes
+import com.linux.recipes.ui.theme.isDark
 import com.linux.recipes.platform.TurnstileGate
 import com.linux.recipes.ui.RecipesNavHost
 import com.linux.recipes.ui.paywall.LocalBilling
@@ -18,7 +25,11 @@ import com.linux.recipes.ui.theme.RecipesTheme
 @Composable
 fun App(graph: AppGraph, darkTheme: Boolean = isSystemInDarkTheme()) {
     val (imports, consent) = aiImport(graph)
-    App(graph.session, graph.recipes, darkTheme, TurnstileChallenge(graph.turnstile, graph.baseUrl), imports, consent, graph.billing)
+    App(
+        graph.session, graph.recipes, darkTheme, TurnstileChallenge(graph.turnstile, graph.baseUrl), imports, consent, graph.billing,
+        translationRepository = graph.translations,
+        appearance = graph.appearance,
+    )
 }
 
 /** The AI import repositories of the running app. Tests pass fakes, or null to hide the import entry. */
@@ -26,7 +37,8 @@ private fun aiImport(graph: AppGraph): Pair<ImportRepository?, ConsentRepository
 
 /**
  * The app on explicit repositories; tests pass fakes and, when sign-in needs it, a [TurnstileChallenge].
- * [billingRepository] null behaves like a device without a store.
+ * [billingRepository] null behaves like a device without a store. [translationRepository] null hides the language
+ * action; [appearance] null keeps the default palette and [darkTheme], and hides the Appearance section.
  */
 @Composable
 fun App(
@@ -37,10 +49,13 @@ fun App(
     importRepository: ImportRepository? = null,
     consentRepository: ConsentRepository? = null,
     billingRepository: BillingRepository? = null,
+    translationRepository: TranslationRepository? = null,
+    appearance: AppearanceStore? = null,
 ) {
-    RecipesTheme(darkTheme) {
-        CompositionLocalProvider(LocalBilling provides billingRepository) {
-            RecipesNavHost(sessionRepository, recipeRepository, turnstile, importRepository, consentRepository)
+    val look = appearance?.state?.collectAsState()?.value ?: Appearance()
+    RecipesTheme(look.isDark(darkTheme), Palettes.byId(look.palette)) {
+        CompositionLocalProvider(LocalBilling provides billingRepository, LocalAppearance provides appearance) {
+            RecipesNavHost(sessionRepository, recipeRepository, turnstile, importRepository, consentRepository, translationRepository)
         }
     }
 }
