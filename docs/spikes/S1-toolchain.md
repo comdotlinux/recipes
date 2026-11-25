@@ -21,7 +21,7 @@ The wrangler and vitest half of S1 is in `docs/spikes/S1-bun-runtime.md`: everyt
 | Tool | Pin | Reason |
 |------|-----|--------|
 | bun | 1.4.5 | latest in `mise ls-remote bun` |
-| `npm:cf` | 1.0.0-rc.4 | `npm view cf dist-tags` gives `{ latest: '1.0.0-rc.4' }`. The registry short name `cf` is the Cloud Foundry CLI; the registry alias `cloudflare-cf` maps to `npm:cf`, and the explicit backend form is used to be unambiguous |
+| `npm:cf` | 1.0.0-rc.4 | `npm view cf dist-tags` gives `{ latest: '1.0.0-rc.4' }`. The registry short name `cf` is a different tool (not from Cloudflare); the registry alias `cloudflare-cf` maps to `npm:cf`, and the explicit backend form is used to be unambiguous |
 | node | 24.22.3 | runtime for `cf` only (this spike); inside the `cf` engines range |
 | java | temurin-25.0.5.1+2.0.LTS | owner prefers 25; see JDK matrix below |
 | maestro | cli-2.12.1 | latest in `mise ls-remote maestro`, matches plan |
@@ -240,7 +240,7 @@ openjdk version "21.0.13.1" 2026-11-17 LTS
 ## Notes for the other workers
 
 - Run tools through mise: `mise exec -- <tool> ...` (or activate mise in the shell). In CI, install mise, then run `mise install` in the repo root.
-- `cf --version` prints only the bare version (`1.0.0-rc.4`). It does not name the product. To prove it is the Cloudflare CLI and not Cloud Foundry (which prints `cf version 8.x`), check `cf --help | grep -q "The Cloudflare CLI"`. Use this in the AC1 CI step.
+- `cf --version` prints only the bare version (`1.0.0-rc.4`). It does not name the product. To prove it is the Cloudflare CLI and not another tool with the same binary name, check `cf --help | grep -q "The Cloudflare CLI"`. Use this in the AC1 CI step.
 - node is in `mise.toml` for `cf` and `wrangler dev` only. That does not change the bun-first rule: use `bun install` and `bun run`, not npm.
 - `ANDROID_HOME` comes from mise `[env]` and respects an existing value. Gradle reads it, so no `local.properties` is needed.
 - `JAVA_HOME` is set by mise to Temurin 25 inside `mise exec`. Android bytecode target: 17 (see JDK matrix).

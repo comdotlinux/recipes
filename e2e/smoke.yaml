@@ -1,0 +1,70 @@
+# Android smoke flow (AC36, part "Android sign-in, manual recipe"). Maestro 2.12.1.
+# Runs against the debug APK talking to `wrangler dev --env local` (test identity provider,
+# Cloudflare's always-pass Turnstile test keys). Selectors are the English texts from
+# shared/src/commonMain/composeResources/values/strings.xml; the screens have no test tags.
+# Run: maestro test -e APP_ID=<debug applicationId> e2e/smoke.yaml
+appId: ${APP_ID}
+env:
+  APP_ID: com.linux.recipes
+---
+- clearState
+- launchApp
+- evalScript: ${output.title = 'E2E ' + Date.now()}
+
+# Sign-in: age confirmation, then the debug build's test provider; the Turnstile page solves itself
+# with the local always-pass key. Every debug install is the same user, so the list may hold older runs.
+- tapOn: "I am 16 or older"
+- tapOn: "Sign in"
+- extendedWaitUntil:
+    visible: "Settings"
+    timeout: 90000
+
+# Create a recipe with a title and one ingredient. A fresh account shows "Add a recipe" in the empty state;
+# with recipes the list shows the "New recipe" button. The list syncs after sign-in, so wait for either.
+- extendedWaitUntil:
+    visible: "Add a recipe|New recipe"
+    timeout: 30000
+- tapOn: "Add a recipe|New recipe"
+- assertVisible: "New recipe"
+- tapOn: "Title"
+# Gboard on a fresh AVD shows a stylus introduction on the first text input that swallows typing.
+- runFlow:
+    when:
+      visible: "Try out your stylus"
+    commands:
+      - tapOn: "Cancel"
+      - tapOn: "Title"
+- inputText: ${output.title}
+- hideKeyboard
+- scrollUntilVisible:
+    element: "Add ingredient"
+    direction: DOWN
+- tapOn: "Add ingredient"
+- tapOn: "Ingredient"
+- inputText: "Kartoffeln"
+- hideKeyboard
+- tapOn: "Save"
+
+# Saving opens the detail screen; back shows it in the list, and it opens again from there.
+- extendedWaitUntil:
+    visible: "Kartoffeln"
+    timeout: 30000
+- assertVisible: "Ingredients"
+- back
+- extendedWaitUntil:
+    visible: ${output.title}
+    timeout: 30000
+- tapOn: ${output.title}
+- assertVisible: "Kartoffeln"
+- back
+
+# Sign out through Settings; the confirm button has the same text as the row, so pick the one next to "Cancel".
+- tapOn: "Settings"
+- tapOn: "Sign out"
+- assertVisible: "Sign out of Recipes?"
+- tapOn:
+    text: "Sign out"
+    rightOf: "Cancel"
+- extendedWaitUntil:
+    visible: "I am 16 or older"
+    timeout: 30000

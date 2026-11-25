@@ -1,6 +1,6 @@
 [tools]
 bun = "1.4.5"
-# Cloudflare CLI (beta). Plain `cf` in the mise registry is the Cloud Foundry CLI.
+# Cloudflare CLI (beta), taken from npm. The short name `cf` in the mise registry is a different tool.
 "npm:cf" = "1.0.0-rc.4"
 # Runtime for two things only (spike S1): the `cf` CLI (its bin starts with `#!/usr/bin/env node`)
 # and `wrangler dev` (under bun every request returns 503, oven-sh/bun#39247). bun stays the package manager.
