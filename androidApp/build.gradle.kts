@@ -50,7 +50,7 @@ dependencies {
 }
 
 // The release APK must carry none of the debug-only local-Worker pieces (src/debug): no cleartext, no
-// network security config, no test sign-in, no base URL override. Every APK entry is scanned (dex, resources.arsc,
+// network security config, no test sign-in, no test store, no base URL override. Every APK entry is scanned (dex, resources.arsc,
 // res/, assets/, lib/, META-INF/), since resource shrinking may rename res/ paths. verifyReleaseIsolation is part of
 // `check`; verifyDebugIsolation exists to show the scan detects them and is expected to fail.
 androidComponents {
@@ -70,6 +70,7 @@ androidComponents {
                 // The last two: classes under earlier package names (stale generated sources) must not ship.
                 val forbidden = listOf(
                     "__TEST_IDP__", "TestAuthProvider", "DEBUG_API_BASE_URL", "10.0.2.2", "network_security_config",
+                    "DebugBillingProvider", "testing/entitlement",
                     "Lapp/recipebox/", "Lde/munichtech/",
                 )
                 apks.forEach { apk ->
