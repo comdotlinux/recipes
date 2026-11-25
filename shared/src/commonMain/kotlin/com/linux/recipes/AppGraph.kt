@@ -13,6 +13,9 @@ import com.linux.recipes.data.DefaultConsentRepository
 import com.linux.recipes.data.DefaultImportRepository
 import com.linux.recipes.data.DefaultRecipeRepository
 import com.linux.recipes.data.DefaultSessionRepository
+import com.linux.recipes.data.DefaultTranslationRepository
+import com.linux.recipes.data.TranslationRepository
+import com.linux.recipes.ui.theme.AppearanceStore
 import com.linux.recipes.data.ImportRepository
 import com.linux.recipes.data.RecipeCache
 import com.linux.recipes.data.RecipeRepository
@@ -79,9 +82,16 @@ class AppGraph(
         consent = consentRepositoryImpl,
         recognizer = textRecognizer,
         currentToken = { tokens.token },
+        onTranslated = { recipeRepositoryImpl.sync() },
         onUnauthorized = { session.signOut() },
     )
     val imports: ImportRepository = importRepositoryImpl
+
+    val translations: TranslationRepository =
+        DefaultTranslationRepository(api, cache, consentRepositoryImpl, importRepositoryImpl, currentToken = { tokens.token })
+
+    /** A device preference outside [CACHE_DIR], so sign-out keeps it. */
+    val appearance = AppearanceStore(Path(filesDir, APPEARANCE_FILE))
 
     // M5: sharing by link, PDF and backup.
     private val shareRepositoryImpl = DefaultShareRepository(
@@ -124,6 +134,7 @@ class AppGraph(
     companion object {
         const val CACHE_DIR = "recipes-data"
         const val INSTALL_MARKER = "installed"
+        const val APPEARANCE_FILE = "appearance.json"
 
         /**
          * A reinstall starts signed out. iOS Keychain items survive deleting the app, the app's files do not:

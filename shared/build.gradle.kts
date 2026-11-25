@@ -119,11 +119,20 @@ kotlin {
         }
     }
 
-    listOf(iosArm64(), iosSimulatorArm64()).forEach { target ->
+    // RevenueCat's cinterop klibs carry `-L` to the Swift libraries of the Xcode they were built with
+    // (/Applications/Xcode-16.4.app, RevenueCat/purchases-kmp#1067), and Kotlin/Native calls `ld` directly, so a test
+    // executable never finds swiftCompatibility56 and friends. The selected Xcode's directories are added instead, plus
+    // the `-rpath /usr/lib/swift` RevenueCat's own build gives its test executables (build-logic configureKotlin.kt).
+    // Only macOS links iOS binaries; elsewhere `xcode-select` is never run.
+    val swiftLibs = providers.exec { commandLine("xcode-select", "-p") }.standardOutput.asText
+        .map { "${it.trim()}/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift" }
+    val linksOnThisHost = System.getProperty("os.name").startsWith("Mac")
+    listOf(iosArm64() to "iphoneos", iosSimulatorArm64() to "iphonesimulator").forEach { (target, platform) ->
         target.binaries.framework {
             baseName = "Shared"
             isStatic = true
         }
+        if (linksOnThisHost) target.binaries.configureEach { linkerOpts("-L${swiftLibs.get()}/$platform", "-rpath", "/usr/lib/swift") }
     }
 
     sourceSets {

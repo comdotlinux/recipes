@@ -19,6 +19,8 @@ import com.linux.recipes.data.ImportRepository
 import com.linux.recipes.data.RecipeRepository
 import com.linux.recipes.data.SessionRepository
 import com.linux.recipes.data.SessionState
+import com.linux.recipes.data.TranslationRepository
+import com.linux.recipes.ui.translate.TranslateViewModel
 import com.linux.recipes.ui.detail.RecipeDetailScreen
 import com.linux.recipes.ui.detail.RecipeDetailViewModel
 import com.linux.recipes.ui.edit.RecipeEditScreen
@@ -63,6 +65,7 @@ fun RecipesNavHost(
     turnstile: TurnstileChallenge? = null,
     imports: ImportRepository? = null,
     consent: ConsentRepository? = null,
+    translations: TranslationRepository? = null,
     nav: NavHostController = rememberNavController(),
 ) {
     val ai = if (imports != null && consent != null) imports to consent else null
@@ -151,6 +154,7 @@ fun RecipesNavHost(
                 vm = viewModel { RecipeDetailViewModel(recipeRepository, id) },
                 onBack = { nav.popBackStack() },
                 onEdit = { nav.navigate(EditRoute(id)) },
+                translate = translations?.let { t -> consent?.let { c -> viewModel { TranslateViewModel(id, t, c) } } },
             )
         }
         composable<EditRoute> { entry ->

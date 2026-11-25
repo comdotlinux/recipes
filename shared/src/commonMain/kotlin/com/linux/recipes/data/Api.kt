@@ -61,6 +61,7 @@ enum class ErrorCode(val wire: String) {
     AttemptLimit("attempt_limit"),
     InvalidUrl("invalid_url"),
     TextTooLarge("text_too_large"),
+    SubscriptionRequired("subscription_required"),
     Unknown("unknown"),
     ;
 
@@ -135,9 +136,20 @@ data class ImportRequest(
     @EncodeDefault(EncodeDefault.Mode.NEVER) val text: String? = null,
 )
 
-/** `status`: pending, running, done, guard_block, no_recipe, invalid or failed. [draft] only when done. */
+/**
+ * `status`: pending, running, done, guard_block, no_recipe, invalid or failed. [draft] only when an import is done.
+ * A translation job (kind `translation`, M4) also names its [recipeId] and target [language].
+ */
 @Serializable
-data class ImportJob(val id: String, val kind: String, val status: String, val createdAt: String, val draft: RecipeInput? = null)
+data class ImportJob(
+    val id: String,
+    val kind: String,
+    val status: String,
+    val createdAt: String,
+    val draft: RecipeInput? = null,
+    val recipeId: String? = null,
+    val language: String? = null,
+)
 
 /** `POST /reports`; [reason] is wrong_content, offensive or other. */
 @Serializable data class Report(val kind: String, val jobId: String, val reason: String, val note: String)
@@ -217,6 +229,15 @@ class Api(
             header(IDEMPOTENCY_KEY, jobId)
             contentType(ContentType.Image.JPEG)
             setBody(jpeg)
+        }
+    }
+
+    /** M4: [jobId] is the Idempotency-Key, as for imports. */
+    suspend fun startTranslation(recipeId: String, jobId: String, language: String): ApiResult<ImportJob> = call {
+        post(url("/recipes/$recipeId/translations")) {
+            auth()
+            header(IDEMPOTENCY_KEY, jobId)
+            json(TranslationRequest(language))
         }
     }
 

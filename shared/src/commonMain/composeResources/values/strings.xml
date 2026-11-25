@@ -231,6 +231,39 @@
     <string name="settings_pro_upgrade">See Recipes Pro</string>
     <string name="settings_pro_manage">Manage subscription</string>
 
+    <!-- M4: translation and themes -->
+    <string name="translate_action">Show in another language</string>
+    <string name="translate_sheet_title">Language</string>
+    <string name="translate_sheet_body">Translations are made by AI. Each new one needs Recipes Pro and uses one of your monthly imports.</string>
+    <string name="translate_original">Original</string>
+    <string name="translate_available">Translation available</string>
+    <string name="translate_stale">Out of date</string>
+    <string name="translate_missing">Translate with AI</string>
+    <string name="translate_again">Translate again</string>
+    <string name="translate_by_ai">Translated by AI from %1$s</string>
+    <string name="translate_stale_note">The recipe changed after this translation was made.</string>
+    <string name="translate_report">Report a problem with this translation</string>
+    <string name="translate_running">Translating this recipe…</string>
+    <string name="translate_waiting_offline">Waiting for a connection to check on the translation.</string>
+    <string name="translate_quota">You have used all of this month's imports and translations. More are available next month.</string>
+    <string name="translate_attempt_limit">Too many tries today. Please try again tomorrow.</string>
+    <string name="translate_already_running">Another import or translation is still running. Please wait until it ends.</string>
+    <string name="translate_offline">The translation could not start. Check your connection and try again.</string>
+    <string name="translate_rejected">This recipe cannot be translated right now.</string>
+    <string name="translate_failed">The translation did not work and was not counted. Please try again later.</string>
+    <string name="translate_blocked">The safety filter stopped this translation. It was not counted.</string>
+    <string name="translate_invalid">The translation did not come out right. It was not counted.</string>
+    <string name="settings_appearance">Appearance</string>
+    <string name="appearance_colours">Colours</string>
+    <string name="appearance_mode">Light or dark</string>
+    <string name="appearance_mode_system">Same as the phone</string>
+    <string name="appearance_mode_light">Light</string>
+    <string name="appearance_mode_dark">Dark</string>
+    <string name="palette_herb">Herb</string>
+    <string name="palette_tomato">Tomato</string>
+    <string name="palette_ocean">Ocean</string>
+    <string name="palette_charcoal">Charcoal</string>
+
     <!-- M5: sharing, PDF, backup -->
     <string name="share_action">Share with a link</string>
     <string name="share_title">Share this recipe</string>

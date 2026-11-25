@@ -1,6 +1,11 @@
 package com.linux.recipes
 
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.uikit.LocalUIViewController
 import androidx.compose.ui.window.ComposeUIViewController
 import com.linux.recipes.data.ShareLinks
 import com.linux.recipes.platform.AppleAuthProvider
@@ -14,7 +19,10 @@ import kotlinx.cinterop.ExperimentalForeignApi
 import platform.Foundation.NSURL
 import platform.Foundation.NSURLIsExcludedFromBackupKey
 import platform.Foundation.NSUserDomainMask
+import platform.UIKit.UIUserInterfaceStyle
 import platform.UIKit.UIViewController
+import com.linux.recipes.ui.theme.AppearanceStore
+import com.linux.recipes.ui.theme.ThemeMode
 
 private val graph: AppGraph by lazy {
     val supportDir = NSFileManager.defaultManager.URLsForDirectory(NSApplicationSupportDirectory, NSUserDomainMask).first() as NSURL
@@ -39,7 +47,31 @@ internal fun excludeCacheFromBackup(supportDir: NSURL): Boolean {
 }
 
 fun MainViewController(): UIViewController = ComposeUIViewController {
-    CompositionLocalProvider(LocalAppGraph provides graph, LocalSharing provides graph.sharing) { App(graph) }
+    CompositionLocalProvider(LocalAppGraph provides graph, LocalSharing provides graph.sharing) {
+        FollowAppearance(graph.appearance)
+        App(graph)
+    }
+}
+
+/**
+ * The status bar follows the app's mode: Compose Multiplatform 1.12 offers no status-bar API from Kotlin except the
+ * deprecated `ComposeUIViewControllerDelegate`, so the window's `overrideUserInterfaceStyle` is set instead; the
+ * SwiftUI host's default status bar style follows it. System mode clears the override.
+ */
+@Composable
+private fun FollowAppearance(store: AppearanceStore) {
+    val mode = store.state.collectAsState().value.mode
+    val controller = LocalUIViewController.current
+    LaunchedEffect(mode) {
+        val style = when (mode) {
+            ThemeMode.System -> UIUserInterfaceStyle.UIUserInterfaceStyleUnspecified
+            ThemeMode.Light -> UIUserInterfaceStyle.UIUserInterfaceStyleLight
+            ThemeMode.Dark -> UIUserInterfaceStyle.UIUserInterfaceStyleDark
+        }
+        // The view joins its window after the first frames.
+        while (controller.view.window == null) withFrameNanos { }
+        controller.view.window?.overrideUserInterfaceStyle = style
+    }
 }
 
 /**

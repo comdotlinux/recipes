@@ -586,6 +586,65 @@ Rules:
 - The paywall opens on `ImportStart.QuotaExhausted` and from "Recipes Pro" in Settings. After `Success` it closes and the import that hit the limit starts again with a new Idempotency-Key.
 - Debug builds of the Android app use a provider in `androidApp/src/debug` with fixed, labelled test prices; a purchase calls the local Worker's `POST /v1/testing/entitlement` (see "Local environment only"). `:androidApp:verifyReleaseIsolation` fails if it reaches a release APK.
 
+### Client, milestone M4: `data/TranslationRepositories.kt`
+
+```kotlin
+/** One entry of `Recipe.translations`. Quantities and units are those of the original by contract. */
+@Serializable
+data class RecipeTranslation(
+    val language: String,
+    val stale: Boolean = false,
+    val title: String,
+    val description: String = "",
+    val ingredients: List<Ingredient> = emptyList(),
+    val steps: List<String> = emptyList(),
+    val tags: List<String> = emptyList(),
+)
+
+/** [name] is the language's own name ("Deutsch", "Türkçe"): data shown as is, never translated. */
+data class TranslationLanguage(val code: String, val name: String)
+
+/** en, de, fr, es, it, pt, nl, pl, tr, sv, in this order. */
+val TranslationLanguages: List<TranslationLanguage>
+
+sealed interface TranslationStart {
+    data class Started(val jobId: String) : TranslationStart
+    data object SubscriptionRequired : TranslationStart      // 402 subscription_required
+    data object QuotaExhausted : TranslationStart            // 402 quota_exhausted
+    data object ConsentRequired : TranslationStart           // 403 consent_required
+    data object AlreadyRunning : TranslationStart            // 409 job_running; activeJob holds it
+    data object AttemptLimit : TranslationStart              // 429 attempt_limit
+    data object Offline : TranslationStart                   // no connection, a 5xx answer or 429 rate_limited
+    data class Rejected(val code: String) : TranslationStart // invalid_body, not_found, ...
+}
+
+interface TranslationRepository {
+    /** The one open job of either kind: the same flow as `ImportRepository.activeJob`. */
+    val activeJob: StateFlow<ImportJobState?>
+    /** `jobId` is the Idempotency-Key. The caller keeps it across retries after Offline, so nothing is charged twice. */
+    suspend fun start(recipeId: String, language: String, jobId: String): TranslationStart
+    /** Polls the open job like `ImportRepository.resume`; a finished translation triggers a recipe sync. */
+    suspend fun resume()
+    /** Clears `activeJob` after the user has dismissed a translation that did not work. */
+    fun acknowledge(jobId: String)
+    /** The language a recipe is shown in, or null for its original. Kept in the cache settings. */
+    fun displayLanguage(recipeId: String): String?
+    fun setDisplayLanguage(recipeId: String, language: String?)
+    /** The job that made this translation, when this device knows it; null hides "Report". */
+    fun jobIdFor(recipeId: String, language: String): String?
+    /** `POST /reports` with kind `translation`. */
+    suspend fun report(jobId: String, reason: ReportReason, note: String): Boolean
+}
+```
+
+`Recipe` gains `translations: List<RecipeTranslation> = emptyList()`, never encoded while empty. From milestone M2, `ImportJobState` gains `recipeId: String? = null` and `language: String? = null` (set for a translation job), `ImportOutcome` gains `Translated`, and `ImportJob` (the `GET /jobs/:id` body) gains the optional `recipeId` and `language`.
+
+Rules:
+- One job model: a translation job is the open job of `DefaultImportRepository`; the server allows one open job per user of either kind, and `GET /jobs/:id` serves both. Starting, restart recovery, adoption of `openJobId`, sign-out and 401 handling are those of imports. A translation that ends as `done` becomes `Translated`, runs one recipe sync and is acknowledged by the repository; the other outcomes stay until the user dismisses them.
+- The app sends nothing to the translation route before `ConsentState` is `Given` for `currentVersion`: the same AI consent as for imports.
+- The cache settings keep, as account data wiped by sign-out, the open job, the chosen display language per recipe and the known translation job ids (newest per recipe and language).
+- The appearance (palette id and System, Light or Dark) is a device preference in `<filesDir>/appearance.json`, outside the cache directory: sign-out keeps it and it is never sent to the server.
+
 ### Client, milestone M5: `data/ShareRepositories.kt`, `data/PdfDownload.kt` and `data/Backup.kt`
 
 ```kotlin

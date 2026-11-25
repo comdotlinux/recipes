@@ -32,6 +32,7 @@ import com.linux.recipes.ui.signin.TurnstileChallenge
 import com.linux.recipes.ui.share.LocalFileActions
 import com.linux.recipes.ui.share.LocalSharing
 import com.linux.recipes.ui.share.SharingServices
+import com.linux.recipes.ui.theme.AppearanceStore
 
 class RecordingUriHandler : UriHandler {
     val opened = mutableListOf<String>()
@@ -64,11 +65,16 @@ fun ComposeUiTest.setApp(
     imports: FakeImportRepository? = null,
     consent: FakeConsentRepository? = null,
     turnstile: TurnstileChallenge? = null,
+    translations: FakeTranslationRepository? = null,
+    appearance: AppearanceStore? = null,
     sharing: SharingServices? = null,
 ) {
     setScreen {
         CompositionLocalProvider(LocalUriHandler provides uriHandler, LocalSharing provides sharing) {
-            App(session, recipes, darkTheme, turnstile, importRepository = imports, consentRepository = consent)
+            App(
+                session, recipes, darkTheme, turnstile, importRepository = imports, consentRepository = consent,
+                translationRepository = translations, appearance = appearance,
+            )
         }
     }
 }
