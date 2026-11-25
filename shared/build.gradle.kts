@@ -85,6 +85,23 @@ val verifyIosAppId = tasks.register("verifyIosAppId") {
 
 tasks.named("check") { dependsOn(verifyIosAppId) }
 
+// AC27: backup export and restore of a synthetic 500 MB account inside a 128 MB heap. Its own JVM test task, because
+// the Android host test task runs every other test with Gradle's default heap; the class is plain JUnit (no Robolectric).
+val backupMemoryTest = tasks.register<Test>("backupMemoryTest") {
+    group = "verification"
+    description = "Streams a 500 MB synthetic account through backup export and restore with a 128 MB heap."
+    val hostTest = tasks.named<Test>("testAndroidHostTest")
+    testClassesDirs = files(hostTest.map { it.testClassesDirs })
+    classpath = files(hostTest.map { it.classpath })
+    useJUnit()
+    filter { includeTestsMatching("com.linux.recipes.data.BackupLargeAccountTest") }
+    maxHeapSize = "128m"
+}
+tasks.matching { it.name == "testAndroidHostTest" }.configureEach {
+    (this as Test).filter { excludeTestsMatching("com.linux.recipes.data.BackupLargeAccountTest") }
+}
+tasks.named("check") { dependsOn(backupMemoryTest) }
+
 // Print every test with its result, on the Android host test task and the iOS simulator test task alike.
 tasks.withType<AbstractTestTask>().configureEach {
     testLogging {
