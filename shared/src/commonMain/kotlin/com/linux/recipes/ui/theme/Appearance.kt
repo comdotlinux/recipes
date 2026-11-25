@@ -1,5 +1,8 @@
 package com.linux.recipes.ui.theme
 
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.staticCompositionLocalOf
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -56,9 +59,18 @@ class AppearanceStore(private val file: Path, private val fs: FileSystem = Syste
 /** Provided by `App`; null (tests of single screens) hides the Appearance section in Settings. */
 val LocalAppearance = staticCompositionLocalOf<AppearanceStore?> { null }
 
-/** Whether [appearance] asks for the dark scheme; [ThemeMode.System] follows [systemDark]. */
+/** Whether this appearance asks for the dark scheme; [ThemeMode.System] follows [systemDark]. */
 fun Appearance.isDark(systemDark: Boolean): Boolean = when (mode) {
     ThemeMode.System -> systemDark
     ThemeMode.Light -> false
     ThemeMode.Dark -> true
+}
+
+/** [RecipesTheme] as [store] says, provided as [LocalAppearance]; without a store, Herb and [systemDark]. */
+@Composable
+fun AppTheme(store: AppearanceStore?, systemDark: Boolean, content: @Composable () -> Unit) {
+    val look = store?.state?.collectAsState()?.value ?: Appearance()
+    RecipesTheme(look.isDark(systemDark), Palettes.byId(look.palette)) {
+        CompositionLocalProvider(LocalAppearance provides store, content = content)
+    }
 }

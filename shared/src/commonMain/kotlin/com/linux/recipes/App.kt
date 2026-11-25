@@ -3,23 +3,18 @@ package com.linux.recipes
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.collectAsState
 import com.linux.recipes.data.BillingRepository
 import com.linux.recipes.data.ConsentRepository
 import com.linux.recipes.data.ImportRepository
 import com.linux.recipes.data.RecipeRepository
 import com.linux.recipes.data.SessionRepository
 import com.linux.recipes.data.TranslationRepository
-import com.linux.recipes.ui.theme.Appearance
+import com.linux.recipes.ui.theme.AppTheme
 import com.linux.recipes.ui.theme.AppearanceStore
-import com.linux.recipes.ui.theme.LocalAppearance
-import com.linux.recipes.ui.theme.Palettes
-import com.linux.recipes.ui.theme.isDark
 import com.linux.recipes.platform.TurnstileGate
 import com.linux.recipes.ui.RecipesNavHost
 import com.linux.recipes.ui.paywall.LocalBilling
 import com.linux.recipes.ui.signin.TurnstileChallenge
-import com.linux.recipes.ui.theme.RecipesTheme
 
 /** The app as the platform entry points start it. */
 @Composable
@@ -52,9 +47,8 @@ fun App(
     translationRepository: TranslationRepository? = null,
     appearance: AppearanceStore? = null,
 ) {
-    val look = appearance?.state?.collectAsState()?.value ?: Appearance()
-    RecipesTheme(look.isDark(darkTheme), Palettes.byId(look.palette)) {
-        CompositionLocalProvider(LocalBilling provides billingRepository, LocalAppearance provides appearance) {
+    AppTheme(appearance, darkTheme) {
+        CompositionLocalProvider(LocalBilling provides billingRepository) {
             RecipesNavHost(sessionRepository, recipeRepository, turnstile, importRepository, consentRepository, translationRepository)
         }
     }
