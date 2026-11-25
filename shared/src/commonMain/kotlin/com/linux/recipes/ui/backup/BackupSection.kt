@@ -38,6 +38,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.io.buffered
+import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.stringResource
 import recipes.shared.generated.resources.Res
 import recipes.shared.generated.resources.action_cancel
@@ -55,6 +56,16 @@ import recipes.shared.generated.resources.backup_over_cap_confirm
 import recipes.shared.generated.resources.backup_over_cap_title
 import recipes.shared.generated.resources.backup_progress
 import recipes.shared.generated.resources.backup_refused
+import recipes.shared.generated.resources.backup_reason_recipe_limit
+import recipes.shared.generated.resources.backup_reason_recipe_storage_cap
+import recipes.shared.generated.resources.backup_reason_recipe_too_large
+import recipes.shared.generated.resources.backup_reason_storage_cap
+import recipes.shared.generated.resources.backup_reason_image_too_large
+import recipes.shared.generated.resources.backup_reason_image_limit
+import recipes.shared.generated.resources.backup_reason_unsupported_media_type
+import recipes.shared.generated.resources.backup_reason_recipe_missing
+import recipes.shared.generated.resources.backup_reason_conflict
+import recipes.shared.generated.resources.backup_reason_other
 import recipes.shared.generated.resources.backup_restore
 import recipes.shared.generated.resources.backup_restored
 import recipes.shared.generated.resources.backup_skipped_item
@@ -222,6 +233,20 @@ internal fun BackupContent(state: BackupState, backup: Backup) {
     }
 }
 
+/** The user's words for a server code of a skipped recipe or picture; no raw code reaches the screen. */
+internal fun reasonOf(code: String): StringResource = when (code) {
+    "recipe_limit" -> Res.string.backup_reason_recipe_limit
+    "recipe_storage_cap" -> Res.string.backup_reason_recipe_storage_cap
+    "recipe_too_large" -> Res.string.backup_reason_recipe_too_large
+    "storage_cap" -> Res.string.backup_reason_storage_cap
+    "image_too_large" -> Res.string.backup_reason_image_too_large
+    "image_limit" -> Res.string.backup_reason_image_limit
+    "unsupported_media_type" -> Res.string.backup_reason_unsupported_media_type
+    "recipe_missing" -> Res.string.backup_reason_recipe_missing
+    "precondition_failed" -> Res.string.backup_reason_conflict
+    else -> Res.string.backup_reason_other
+}
+
 @Composable
 private fun Outcome(outcome: BackupOutcome) {
     val style = MaterialTheme.typography.bodyMedium
@@ -236,11 +261,11 @@ private fun Outcome(outcome: BackupOutcome) {
             Text(stringResource(Res.string.backup_restored, r.recipesWritten, r.picturesWritten, r.recipesUnchanged + r.picturesUnchanged), style = style)
             if (r.skippedRecipes.isNotEmpty()) {
                 Text(stringResource(Res.string.backup_skipped_recipes), style = style, color = MaterialTheme.colorScheme.error)
-                r.skippedRecipes.forEach { Text(stringResource(Res.string.backup_skipped_item, it.title, it.code), style = style) }
+                r.skippedRecipes.forEach { Text(stringResource(Res.string.backup_skipped_item, it.title, stringResource(reasonOf(it.code))), style = style) }
             }
             if (r.skippedPictures.isNotEmpty()) {
                 Text(stringResource(Res.string.backup_skipped_pictures), style = style, color = MaterialTheme.colorScheme.error)
-                r.skippedPictures.forEach { Text(stringResource(Res.string.backup_skipped_item, it.title, it.code), style = style) }
+                r.skippedPictures.forEach { Text(stringResource(Res.string.backup_skipped_item, it.title, stringResource(reasonOf(it.code))), style = style) }
             }
             if (r.malformedLines > 0) Text(stringResource(Res.string.backup_malformed, r.malformedLines), style = style)
         }

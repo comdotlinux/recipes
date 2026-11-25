@@ -1,6 +1,8 @@
 package com.linux.recipes.data
 
 import kotlin.io.encoding.Base64
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -110,16 +112,20 @@ class Backup(
         if (!synced) return ExportResult.Offline
         val pictures = all.flatMap { r -> r.imageIds.distinct().map { id -> Triple(r.id, id, pictureSize(id) ?: 0L) } }
         val header = BackupHeader(FORMAT, VERSION, all.size, pictures.size, pictures.sumOf { it.third })
-        var result: ExportResult = ExportResult.Done(all.size, pictures.size)
         val saved = try {
-            save { sink -> result = write(sink, header, all, pictures) }
+            save { sink -> write(sink, header, all, pictures) }
+        } catch (missing: PictureGone) {
+            return ExportResult.MissingPictures(missing.titles)
         } finally {
             _progress.value = null
         }
-        return if (saved) result else ExportResult.Cancelled
+        return if (saved) ExportResult.Done(all.size, pictures.size) else ExportResult.Cancelled
     }
 
-    private fun write(sink: Sink, header: BackupHeader, all: List<Recipe>, pictures: List<Triple<String, String, Long>>): ExportResult {
+    /** Thrown out of the writer, so the save dialog's file is removed rather than left half written. */
+    private class PictureGone(val titles: List<String>) : Exception()
+
+    private suspend fun write(sink: Sink, header: BackupHeader, all: List<Recipe>, pictures: List<Triple<String, String, Long>>) {
         val total = all.size + pictures.size
         _progress.value = BackupProgress(0, total)
         sink.writeString(json.encodeToString(BackupHeader.serializer(), header) + "\n")
@@ -128,13 +134,14 @@ class Backup(
             _progress.value = BackupProgress(i + 1, total)
         }
         pictures.forEachIndexed { i, (recipeId, id, size) ->
-            // Removed from the device after the check (a sync dropped it): stop rather than write a broken file.
-            val source = openPicture(id)?.buffered() ?: return ExportResult.MissingPictures(all.filter { it.id == recipeId }.map { it.title })
+            // Cancel stops between pictures; the caller then removes the unfinished file.
+            currentCoroutineContext().ensureActive()
+            // Removed from the device after the check (a sync dropped it): stop; the caller removes the unfinished file.
+            val source = openPicture(id)?.buffered() ?: throw PictureGone(all.filter { it.id == recipeId }.map { it.title })
             source.use { writePicture(sink, recipeId, id, size, it) }
             _progress.value = BackupProgress(all.size + i + 1, total)
         }
         sink.flush()
-        return ExportResult.Done(all.size, pictures.size)
     }
 
     /** Reads the header and counts the picture bytes the account does not hold yet, for the warning before a restore. */

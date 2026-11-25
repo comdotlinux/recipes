@@ -12,13 +12,16 @@ import io.github.vinceglb.filekit.cacheDir
 import io.github.vinceglb.filekit.dialogs.openFilePicker
 import io.github.vinceglb.filekit.dialogs.openFileSaver
 import io.github.vinceglb.filekit.dialogs.shareFile
+import io.github.vinceglb.filekit.delete
 import io.github.vinceglb.filekit.div
 import io.github.vinceglb.filekit.sink
 import io.github.vinceglb.filekit.source
 import io.github.vinceglb.filekit.startAccessingSecurityScopedResource
 import io.github.vinceglb.filekit.stopAccessingSecurityScopedResource
 import io.github.vinceglb.filekit.write
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.withContext
 import kotlinx.io.RawSource
 import kotlinx.io.Sink
 import kotlinx.io.buffered
@@ -45,7 +48,10 @@ class PickedFile(val open: () -> RawSource, val release: () -> Unit = {})
 class FileActions(
     /** Hands [text] (a link) to the system share sheet. */
     val shareText: (String) -> Unit,
-    /** Shows the save dialog and lets [write] fill the chosen file; false when the user cancelled. */
+    /**
+     * Shows the save dialog and lets [write] fill the chosen file; false when the user cancelled. When [write] throws
+     * (a failure or cancellation part way), the chosen file is removed and the exception rethrown.
+     */
     val save: suspend (suggestedName: String, extension: String, write: suspend (Sink) -> Unit) -> Boolean,
     /** Shows the open dialog; null when the user cancelled. */
     val pick: suspend () -> PickedFile?,
@@ -74,6 +80,11 @@ fun rememberFileActions(): FileActions {
                     val scoped = file.startAccessingSecurityScopedResource()
                     try {
                         file.sink(append = false).buffered().use { write(it) }
+                    } catch (e: Throwable) {
+                        // An unfinished file must not look like a backup: remove it (Android through the document
+                        // provider, iOS while access is still held), also when the work was cancelled.
+                        withContext(NonCancellable) { runCatching { file.delete(mustExist = false) } }
+                        throw e
                     } finally {
                         if (scoped) file.stopAccessingSecurityScopedResource()
                     }

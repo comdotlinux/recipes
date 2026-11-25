@@ -20,6 +20,8 @@ class FakeFileActions(var picked: ByteArray? = null) {
     val sharedFiles = mutableListOf<Pair<String, ByteArray>>()
     val saved = mutableListOf<Pair<String, ByteArray>>()
     var cancelSave = false
+    /** Files whose writing failed or was cancelled and that the dialog removed. */
+    val discarded = mutableListOf<String>()
     var releases = 0
     /** When set, the open dialog returns what this makes (a backup the test exports first). */
     var pickedLater: (suspend () -> ByteArray)? = null
@@ -29,7 +31,13 @@ class FakeFileActions(var picked: ByteArray? = null) {
         save = { name, extension, write ->
             if (cancelSave) false else {
                 val buffer = Buffer()
-                write(buffer)
+                try {
+                    write(buffer)
+                } catch (e: Throwable) {
+                    // As the real dialog does: the unfinished file is removed.
+                    discarded += "$name.$extension"
+                    throw e
+                }
                 saved += "$name.$extension" to buffer.readByteArray()
                 true
             }

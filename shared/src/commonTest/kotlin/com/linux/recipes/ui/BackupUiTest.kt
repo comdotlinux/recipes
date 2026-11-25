@@ -137,7 +137,7 @@ class BackupUiTest : UiTest() {
         click("Restore anyway")
         waitForText("Restored 2 recipes and 0 pictures. Already up to date: 0.")
         reveal("Pictures not restored:")
-        reveal("Kartoffelsalat (storage_cap)")
+        reveal("Kartoffelsalat: your picture storage is full")
     }
 
     @Test
@@ -167,5 +167,18 @@ class BackupUiTest : UiTest() {
         settings(target)
         press("Restore")
         waitForText("The server cannot be reached right now. Please check your connection and try again.")
+    }
+
+    @Test
+    fun everySkipCodeHasItsOwnTextAndUnknownCodesAGenericOne() {
+        val codes = listOf(
+            "recipe_limit", "recipe_storage_cap", "recipe_too_large", "storage_cap", "image_too_large", "image_limit",
+            "unsupported_media_type", "recipe_missing", "precondition_failed",
+        )
+        val texts = codes.map { com.linux.recipes.ui.backup.reasonOf(it) }
+        assertEquals(codes.size, texts.toSet().size)
+        val generic = com.linux.recipes.ui.backup.reasonOf("something_new")
+        assertTrue(generic !in texts)
+        assertEquals(generic, com.linux.recipes.ui.backup.reasonOf("invalid_body"))
     }
 }

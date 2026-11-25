@@ -328,9 +328,19 @@
     <string name="backup_restored">Restored %1$d recipes and %2$d pictures. Already up to date: %3$d.</string>
     <string name="backup_skipped_recipes">Recipes not restored:</string>
     <string name="backup_skipped_pictures">Pictures not restored:</string>
-    <string name="backup_skipped_item">%1$s (%2$s)</string>
+    <string name="backup_skipped_item">%1$s: %2$s</string>
     <string name="backup_malformed">Lines that could not be read and were skipped: %1$d</string>
     <string name="backup_interrupted">The restore stopped before the end. Run it again to finish it; nothing is restored twice.</string>
-    <string name="backup_cancelled">The export was stopped. The file it started is incomplete; please delete it.</string>
+    <string name="backup_cancelled">The export was stopped. The unfinished file was removed.</string>
+    <string name="backup_reason_recipe_limit">you have reached the maximum number of recipes</string>
+    <string name="backup_reason_recipe_storage_cap">the text storage of your recipes is full</string>
+    <string name="backup_reason_recipe_too_large">the recipe is too large</string>
+    <string name="backup_reason_storage_cap">your picture storage is full</string>
+    <string name="backup_reason_image_too_large">the picture is too large</string>
+    <string name="backup_reason_image_limit">the recipe already has five pictures</string>
+    <string name="backup_reason_unsupported_media_type">the picture is not a JPEG, PNG or WebP image</string>
+    <string name="backup_reason_recipe_missing">its recipe was not restored</string>
+    <string name="backup_reason_conflict">the recipe was changed on another device during the restore</string>
+    <string name="backup_reason_other">the server did not accept it</string>
     <string name="backup_failed">The file could not be read or written.</string>
 </resources>

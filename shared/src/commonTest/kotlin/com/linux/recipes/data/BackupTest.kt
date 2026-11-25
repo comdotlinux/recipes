@@ -12,6 +12,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.Buffer
 import kotlinx.io.readByteArray
@@ -286,9 +287,53 @@ class BackupTest {
         }
         var opened = false
         val result = backupOf(source).export { _ -> true.also { opened = true } }
-        // The sync stops at the first failed download, so the pictures after it are missing too.
-        assertEquals(ExportResult.MissingPictures(listOf("Ceviche", "Kartoffelsalat")), result)
+        assertEquals(ExportResult.MissingPictures(listOf("Ceviche")), result)
         assertTrue(!opened, "the save dialog must not open")
+    }
+
+    /** What the real save dialog does: a writer that throws leaves no file behind. */
+    private class Dialog {
+        val discarded = mutableListOf<Int>()
+        val save: suspend (suspend (kotlinx.io.Sink) -> Unit) -> Boolean = { write ->
+            val buffer = Buffer()
+            try {
+                write(buffer)
+            } catch (e: Throwable) {
+                discarded += buffer.size.toInt()
+                throw e
+            }
+            true
+        }
+    }
+
+    @Test
+    fun aPictureGoneDuringTheExportRemovesTheUnfinishedFile() = runTest {
+        val source = sourceAccount()
+        val repo = DefaultRecipeRepository(source.api(), RecipeCache(tempDir()), currentToken = { "t" }) {}
+        val backup = Backup(source.api(), repo, openPicture = { id ->
+            if (id == IMG_2) null else repo.imagePath(id)?.let { kotlinx.io.files.SystemFileSystem.source(kotlinx.io.files.Path(it)) }
+        })
+        val dialog = Dialog()
+        assertEquals(ExportResult.MissingPictures(listOf("Kartoffelsalat")), backup.export(dialog.save))
+        assertEquals(1, dialog.discarded.size)
+    }
+
+    @Test
+    fun cancellingTheExportRemovesTheUnfinishedFile() = runTest {
+        val source = sourceAccount()
+        val repo = DefaultRecipeRepository(source.api(), RecipeCache(tempDir()), currentToken = { "t" }) {}
+        lateinit var job: kotlinx.coroutines.Job
+        val backup = Backup(source.api(), repo, openPicture = { id ->
+            job.cancel()
+            repo.imagePath(id)?.let { kotlinx.io.files.SystemFileSystem.source(kotlinx.io.files.Path(it)) }
+        })
+        val dialog = Dialog()
+        var result: ExportResult? = null
+        job = launch { result = backup.export(dialog.save) }
+        job.join()
+        assertEquals(null, result)
+        assertEquals(1, dialog.discarded.size)
+        assertEquals(null, backup.progress.value)
     }
 
     @Test
