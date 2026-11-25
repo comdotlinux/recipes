@@ -2,11 +2,27 @@
  * Analytics Engine events (plan 4.10). Events about a user are written by that user's object with
  * index = its random metrics_id, never the user id. Events without a user are written by the Worker without an index.
  */
-export type UserEvent = { event: "account_created" } | { event: "session_created" } | { event: "request"; group: string; status: number };
+export type UserEvent =
+	| { event: "account_created" }
+	| { event: "session_created" }
+	| { event: "request"; group: string; status: number }
+	| { event: "import_outcome"; kind: string; outcome: string; durationMs: number }
+	| { event: "quota_denied"; reason: string }
+	| { event: "report"; kind: string; reason: string };
 
+/** No content, no URLs, no user text: only the event, fixed codes and a duration. */
 export function userEvent(env: Env, metricsId: string, e: UserEvent): void {
-	const blobs = e.event === "request" ? [e.event, e.group, String(e.status)] : [e.event];
-	env.METRICS.writeDataPoint({ indexes: [metricsId], blobs, doubles: [1] });
+	const blobs =
+		e.event === "request"
+			? [e.event, e.group, String(e.status)]
+			: e.event === "import_outcome"
+				? [e.event, e.kind, e.outcome]
+				: e.event === "quota_denied"
+					? [e.event, e.reason]
+					: e.event === "report"
+						? [e.event, e.kind, e.reason]
+						: [e.event];
+	env.METRICS.writeDataPoint({ indexes: [metricsId], blobs, doubles: [e.event === "import_outcome" ? e.durationMs : 1] });
 }
 
 export type SystemEvent =

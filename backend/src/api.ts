@@ -11,9 +11,10 @@ import {
 	verifyTurnstile,
 } from "./auth/index";
 import { type Result, error, toResponse } from "./http";
+import { MAX_TEXT_CHARS, validateUrl } from "./ai/fetch-url";
 import { ALLOWED_MIME, MAX_IMAGE_BYTES, sniffImage } from "./images";
 import { systemEvent } from "./metrics";
-import { MAX_RECIPE_BYTES, RecipeInput, isId } from "./recipes";
+import { ID_PATTERN, MAX_RECIPE_BYTES, RecipeInput, isId } from "./recipes";
 import type { UserDO } from "./user-do";
 
 export type TestProvider = (idToken: string, nonce: string) => Promise<{ sub: string } | null>;
@@ -55,7 +56,10 @@ const bodyCheck = (c: C, max: number): "length_required" | "too_long" | null => 
 const LENGTH_REQUIRED = error(411, "length_required", "send Content-Length");
 
 // The RPC stub types map `unknown` bodies to never; every method returns a structured-clonable Result, so use the class types.
-type UserObject = Pick<UserDO, "createSession" | "deleteSession" | "me" | "listRecipes" | "putRecipe" | "deleteRecipe" | "putImage" | "getImage">;
+type UserObject = Pick<
+	UserDO,
+	"createSession" | "deleteSession" | "me" | "listRecipes" | "putRecipe" | "deleteRecipe" | "putImage" | "getImage" | "setConsent" | "clearConsent" | "startImport" | "getJob" | "report"
+>;
 
 /** The only way to an object: the user id comes from the authenticated token, never from the client. */
 const userObject = (env: Env, userId: string): UserObject => {
@@ -229,6 +233,93 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 	app.get(
 		"/v1/images/:imageId",
 		authed(async (o, a, c) => (ids(c, "imageId") ? o.getImage(a.secretHash, c.req.param("imageId")!) : error(400, "invalid_id", "id must be a lowercase UUID"))),
+	);
+
+	/** Size-checked JSON body, or the error to answer with. */
+	const readJson = async (c: C, max: number): Promise<{ value: unknown } | { fail: Result }> => {
+		const size = bodyCheck(c, max);
+		if (size === "length_required") return { fail: LENGTH_REQUIRED };
+		if (size === "too_long") return { fail: error(413, "text_too_large", "body too large") };
+		try {
+			return { value: JSON.parse(await c.req.text()) };
+		} catch {
+			return { fail: error(400, "invalid_body", "body is not JSON") };
+		}
+	};
+
+	app.put(
+		"/v1/me/consent",
+		authed(async (o, a, c) => {
+			const body = await readJson(c, 1024);
+			if ("fail" in body) return body.fail;
+			const parsed = z.strictObject({ version: z.number().int().min(1) }).safeParse(body.value);
+			return parsed.success ? o.setConsent(a.secretHash, parsed.data.version) : error(400, "invalid_body", "send { version }");
+		}),
+	);
+
+	app.delete(
+		"/v1/me/consent",
+		authed((o, a) => o.clearConsent(a.secretHash)),
+	);
+
+	const ImportBody = z.discriminatedUnion("kind", [
+		z.strictObject({ kind: z.literal("url"), url: z.string().min(1) }),
+		z.strictObject({ kind: z.literal("text"), text: z.string().min(1) }),
+	]);
+	// JSON overhead plus 20,000 characters of up to 4 UTF-8 bytes each.
+	const MAX_IMPORT_JSON = 4 * MAX_TEXT_CHARS + 4096;
+
+	app.post(
+		"/v1/imports",
+		authed(async (o, a, c) => {
+			const key = c.req.header("idempotency-key") ?? "";
+			if (!isId(key)) return error(400, "invalid_id", "Idempotency-Key must be a lowercase UUID");
+			const type = (c.req.header("content-type") ?? "").split(";")[0].trim().toLowerCase();
+			if (type === "image/jpeg") {
+				const size = bodyCheck(c, MAX_IMAGE_BYTES);
+				if (size === "length_required") return LENGTH_REQUIRED;
+				if (size === "too_long") return error(413, "image_too_large", "photo over 1.5 MB");
+				const bytes = await c.req.arrayBuffer();
+				if (bytes.byteLength > MAX_IMAGE_BYTES) return error(413, "image_too_large", "photo over 1.5 MB");
+				if (sniffImage(new Uint8Array(bytes)) !== "image/jpeg") return error(415, "unsupported_media_type", "photo must be a JPEG");
+				return o.startImport(a.secretHash, key, { kind: "photo", bytes });
+			}
+			if (type !== "application/json") return error(415, "unsupported_media_type", "send JSON or image/jpeg");
+			const body = await readJson(c, MAX_IMPORT_JSON);
+			if ("fail" in body) return body.fail;
+			const parsed = ImportBody.safeParse(body.value);
+			if (!parsed.success) return error(400, "invalid_body", "send { kind: url, url } or { kind: text, text }");
+			if (parsed.data.kind === "text") {
+				if (parsed.data.text.length > MAX_TEXT_CHARS) return error(413, "text_too_large", "text over 20,000 characters");
+				return o.startImport(a.secretHash, key, parsed.data);
+			}
+			const check = validateUrl(parsed.data.url);
+			if (!check.ok) return error(400, "invalid_url", `url rejected: ${check.reason}`);
+			return o.startImport(a.secretHash, key, { kind: "url", url: check.url.toString() });
+		}),
+	);
+
+	app.get(
+		"/v1/jobs/:id",
+		authed(async (o, a, c) => (ids(c, "id") ? o.getJob(a.secretHash, c.req.param("id")!) : error(400, "invalid_id", "id must be a lowercase UUID"))),
+	);
+
+	const ReportBody = z.strictObject({
+		kind: z.literal("import_result"),
+		jobId: z.string().regex(ID_PATTERN),
+		reason: z.enum(["wrong_content", "offensive", "other"]),
+		note: z.string().max(1000).optional(),
+	});
+
+	app.post(
+		"/v1/reports",
+		authed(async (o, a, c) => {
+			const body = await readJson(c, 8192);
+			if ("fail" in body) return body.fail;
+			const parsed = ReportBody.safeParse(body.value);
+			if (!parsed.success) return error(400, "invalid_body", "body does not match Report");
+			return o.report(a.secretHash, { ...parsed.data, note: parsed.data.note ?? "" });
+		}),
 	);
 
 	app.notFound((c) => fail(c, 404, "not_found", "no such route"));

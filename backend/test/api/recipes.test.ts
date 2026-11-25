@@ -5,7 +5,7 @@ import recipeFixture from "../../../contract/fixtures/recipe.json";
 import inputFixture from "../../../contract/fixtures/recipe_input.json";
 import listFixture from "../../../contract/fixtures/recipes_list.json";
 import { MAX_RECIPES } from "../../src/recipes";
-import { MARKER_TTL_MS, PAGE_SIZE } from "../../src/user-do";
+import { MARKER_TTL_MS, PAGE_SIZE, RECIPE_STORAGE_CAP } from "../../src/user-do";
 import { env } from "cloudflare:test";
 import { type Session, call, inObject, interceptOutbound, signIn, userStub, uuid } from "./helpers";
 
@@ -284,3 +284,71 @@ describe("session revoked while a write waits for the rate limiter", () => {
 		expect(stored).toBe(0);
 	});
 });
+
+describe("stored recipe text cap (20 MB per user)", () => {
+	const counter = (s: Session) => inObject(s.userId, (_i, st) => Number(st.storage.sql.exec("SELECT value FROM meta WHERE key = 'recipe_bytes'").one().value));
+	const fresh = (s: Session) => inObject(s.userId, (_i, st) => st.storage.sql.exec("SELECT coalesce(sum(length(CAST(json AS BLOB))), 0) AS n FROM recipes WHERE deleted = 0").one().n as number);
+	/** Fixture: stored recipes (1 MB each, a row's size limit is below 20 MB) filling the cap up to `free` bytes; returns their ids. */
+	const fill = (s: Session, free: number) =>
+		inObject(s.userId, (_i, st) => {
+			const ids: string[] = [];
+			for (let left = RECIPE_STORAGE_CAP - free; left > 0; left -= 1_000_000) {
+				const id = uuid();
+				ids.push(id);
+				st.storage.sql.exec("INSERT INTO recipes (id, rev, deleted, updated_at, json) VALUES (?, 0, 0, 0, ?)", id, "x".repeat(Math.min(left, 1_000_000)));
+			}
+			st.storage.sql.exec("INSERT INTO meta (key, value) VALUES ('recipe_bytes', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", String(RECIPE_STORAGE_CAP - free));
+			return ids;
+		});
+
+	it("a create over the cap answers 413 recipe_storage_cap; deleting frees the space", async () => {
+		const s = await signIn();
+		const [big] = await fill(s, 100);
+		const res = await put(s, input());
+		expect([res.status, await code(res)]).toEqual([413, "recipe_storage_cap"]);
+		expect((await call(`/recipes/${big}`, { method: "DELETE", token: s.token })).status).toBe(204);
+		expect(await counter(s)).toBe(await fresh(s));
+		expect((await put(s, input())).status).toBe(200);
+	});
+
+	it("an update that grows over the cap is refused; one that keeps or shrinks the size passes", async () => {
+		const s = await signIn();
+		const id = uuid();
+		await put(s, input(id));
+		const size = await counter(s);
+		await fill(s, 10);
+		await inObject(s.userId, (_i, st) => st.storage.sql.exec("UPDATE meta SET value = ? WHERE key = 'recipe_bytes'", String(RECIPE_STORAGE_CAP - 10 + size)));
+		const grow = await put(s, input(id, { description: "x".repeat(500) }), { "if-match": '"1"' });
+		expect([grow.status, await code(grow)]).toEqual([413, "recipe_storage_cap"]);
+		expect((await put(s, input(id), { "if-match": '"1"' })).status).toBe(200);
+		expect((await put(s, input(id, { description: "" , title: "K" }), { "if-match": '"2"' })).status).toBe(200);
+	});
+
+	it("the running total equals a fresh sum after creates, updates, deletes, revives and a purge", async () => {
+		const s = await signIn();
+		const [a, b, c] = [uuid(), uuid(), uuid()];
+		await put(s, input(a));
+		await put(s, input(b, { title: "Größere Überschrift mit Umlauten äöü" }));
+		await put(s, input(c, { steps: ["eins", "zwei", "drei"] }));
+		await put(s, input(a, { description: "länger ".repeat(50) }), { "if-match": '"1"' });
+		await call(`/recipes/${b}`, { method: "DELETE", token: s.token });
+		await put(s, input(b));
+		await call(`/recipes/${c}`, { method: "DELETE", token: s.token });
+		expect(await counter(s)).toBe(await fresh(s));
+		await inObject(s.userId, async (instance, st) => {
+			st.storage.sql.exec("UPDATE recipes SET updated_at = 0 WHERE deleted = 1");
+			await instance.expire(Date.now());
+		});
+		expect(await counter(s)).toBe(await fresh(s));
+		expect(await fresh(s)).toBeGreaterThan(0);
+	});
+
+	it("an object without a counter (stored before the cap existed) starts from the table", async () => {
+		const s = await signIn();
+		await put(s, input());
+		await inObject(s.userId, (_i, st) => st.storage.sql.exec("DELETE FROM meta WHERE key = 'recipe_bytes'"));
+		await put(s, input());
+		expect(await counter(s)).toBe(await fresh(s));
+	});
+});
+

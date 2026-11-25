@@ -15,6 +15,29 @@ Staging and production still require real secrets (`wrangler secret put <NAME> -
 `.dev.vars.example`. Tests and `build:check` fail if the development or test values reach those environments or the production bundle.
 Local sign-in uses the provider `test` (`src/testing/test-idp.ts`), which only the local entry accepts.
 
+## Try an import locally
+
+`env.local` has no Workers AI binding. The local entry uses a deterministic stand-in instead (`src/testing/local-ai.ts`):
+the first line of the text becomes the title and the other lines the steps. Markers in the text produce the other outcomes:
+`__NO_RECIPE__` gives `no_recipe`, `__GUARD__` gives `guard_block`, `__FAIL__` gives `failed` (after the three tries, which
+take about 1.5 minutes because of the retry backoff). Every photo reads as a fixed text. URL imports fetch the real page.
+
+```sh
+B=http://127.0.0.1:8787/v1
+N=$(curl -s -X POST $B/session/nonce | jq -r .nonce)
+T=$(curl -s -X POST $B/session -H 'content-type: application/json' \
+  -d "{\"provider\":\"test\",\"idToken\":\"__TEST_IDP__|me|$N\",\"nonce\":\"$N\",\"turnstileToken\":\"x\",\"ageConfirmed\":true}" | jq -r .token)
+curl -s -X PUT $B/me/consent -H "authorization: Bearer $T" -H 'content-type: application/json' -d '{"version":1}'
+K=$(uuidgen | tr 'A-Z' 'a-z')
+curl -s -X POST $B/imports -H "authorization: Bearer $T" -H "idempotency-key: $K" -H 'content-type: application/json' \
+  -d '{"kind":"text","text":"Pancakes\nMix the batter.\nFry."}'     # or put __NO_RECIPE__, __GUARD__ or __FAIL__ in the text
+curl -s $B/jobs/$K -H "authorization: Bearer $T"                     # poll until status is done, no_recipe, guard_block, invalid or failed
+```
+
+A free account has one import; a `no_recipe`, `guard_block` or `failed` outcome gives it back (at most 5 times), a `done` one
+uses it. Sign in with another `idToken` subject (`__TEST_IDP__|someone-else|...`) for a fresh account.
+URL import: `-d '{"kind":"url","url":"https://example.org/"}'`. Photo import: `-H 'content-type: image/jpeg' --data-binary @photo.jpg`.
+
 ## Checks
 
 ```sh

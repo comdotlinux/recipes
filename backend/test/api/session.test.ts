@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import meFixture from "../../../contract/fixtures/me.json";
+import requestFixture from "../../../contract/fixtures/session_request.json";
 import sessionFixture from "../../../contract/fixtures/session_response.json";
 import { testIdToken } from "../../src/testing/test-idp";
 import { DAY_MS, SESSION_TTL_MS } from "../../src/user-do";
@@ -52,6 +53,10 @@ describe("POST /session refusals (AC4)", () => {
 		["body that is not JSON", () => call("/session", { method: "POST", body: "{" }), 400, "invalid_body"],
 		["missing age confirmation", () => attempt("google", {}, { ageConfirmed: false }), 400, "age_confirmation_required"],
 		["missing Turnstile token", () => attempt("google", {}, { turnstileToken: "" }), 400, "invalid_body"],
+		["absent Turnstile token field", async () => {
+			const n = await nonce();
+			return session({ provider: "google", idToken: await providerToken("google", n), nonce: n, ageConfirmed: true });
+		}, 400, "invalid_body"],
 		["invalid Turnstile token", () => attempt("google", {}, { turnstileToken: "bad" }), 401, "invalid_turnstile"],
 		["expired id token", () => attempt("google", { expSeconds: -120 }), 401, "invalid_token"],
 		["wrong aud", () => attempt("google", { aud: "someone.else" }), 401, "invalid_token"],
@@ -244,3 +249,39 @@ describe("sessions per user (security review S8)", () => {
 		expect(stored).toBe(10);
 	});
 });
+
+describe("refusals create no session", () => {
+	const rows = async (sub: string) => {
+		const res = await attempt("google", { sub });
+		expect(res.status).toBe(200);
+		const { userId } = (await res.json()) as { userId: string };
+		return inObject(userId, (_i, st) => st.storage.sql.exec("SELECT count(*) AS n FROM sessions").one().n);
+	};
+	const refusals: [string, (sub: string) => Promise<Response>][] = [
+		["absent Turnstile field", async (sub) => {
+			const n = await nonce();
+			return session({ provider: "google", idToken: await providerToken("google", n, { sub }), nonce: n, ageConfirmed: true });
+		}],
+		["invalid Turnstile token", (sub) => attempt("google", { sub }, { turnstileToken: "bad" })],
+		["invalid nonce", async (sub) => {
+			const fake = "n1.9999999999999.AAAA";
+			return session({ provider: "google", idToken: await providerToken("google", fake, { sub }), nonce: fake, turnstileToken: TURNSTILE_OK, ageConfirmed: true });
+		}],
+		["invalid id token", (sub) => attempt("google", { sub, wrongKey: true })],
+	];
+	for (const [name, refuse] of refusals) {
+		it(`${name}: a later valid sign-in for the same subject finds exactly one session`, async () => {
+			const sub = `refused-${name.replace(/ /g, "-")}`;
+			expect([400, 401]).toContain((await refuse(sub)).status);
+			expect(await rows(sub)).toBe(1);
+		});
+	}
+});
+
+describe("contract fixture session_request.json", () => {
+	it("passes the request schema: the route goes on to the Turnstile check", async () => {
+		const res = await session(requestFixture as Record<string, unknown>);
+		expect([res.status, await errorCode(res)]).toEqual([401, "invalid_turnstile"]);
+	});
+});
+

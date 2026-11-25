@@ -5,6 +5,10 @@ import { userEvent } from "./metrics";
 import { MAX_IMAGES_PER_RECIPE, MAX_RECIPES, type RecipeInput, isoTime, toRecipe } from "./recipes";
 import { migrate, rowCounts, schemaVersion } from "./storage/migrations";
 import { armAlarm, runDueTasks, schedule } from "./storage/tasks";
+import { fetchPage } from "./ai/fetch-url";
+import { AI_NOTICE_VERSION, ConsentRequired, type ModelRunner } from "./ai/gateway";
+import { type ImportOutcome, structureRecipe } from "./ai/structure";
+import { transcribePhoto } from "./ai/transcribe";
 
 export const DAY_MS = 86_400_000;
 export const SESSION_TTL_MS = 30 * DAY_MS;
@@ -13,6 +17,21 @@ export const COUNTER_DAYS = 90;
 export const MONTH_LIMIT = 30;
 export const PAGE_SIZE = 200;
 export const MAX_SESSIONS = 10;
+/** Sum of the stored JSON of live recipes per user: 20 MB, so a full pull fits in a phone's memory. */
+export const RECIPE_STORAGE_CAP = 20_971_520;
+const utf8 = new TextEncoder();
+const utf8Length = (s: string) => utf8.encode(s).byteLength;
+export const JOB_TIMEOUT_MS = 10 * 60 * 1000;
+export const JOB_TRIES = 3;
+export const JOB_RESULT_DAYS = 7;
+export const ATTEMPTS_PER_DAY = 10;
+export const FREE_REFUND_LIMIT = 5;
+export const REPORT_DAYS = 90;
+
+export type ImportInput = { kind: "url"; url: string } | { kind: "text"; text: string } | { kind: "photo"; bytes: ArrayBuffer };
+type JobRow = { job_key: string; kind: string; status: string; input: string | null; input_blob: ArrayBuffer | null; created_at: number; result_json: string | null; charge: string | null; period: string | null };
+const OPEN = ["pending", "running"];
+const month = (ms: number) => new Date(ms).toISOString().slice(0, 7);
 
 type RecipeRow = { id: string; rev: number; deleted: number; updated_at: number; json: string | null };
 
@@ -73,6 +92,8 @@ export class UserDO extends DurableObject<Env> {
 		// The await above lets other requests in; a DELETE /session in between must win.
 		if (write && !this.authenticate(secretHash, now)) return error(401, "unauthenticated", "session revoked");
 		const result = limited ? error(429, "rate_limited", "too many writes") : await op(now);
+		// Job polling is not counted (plan 4.10).
+		if (group === "jobs") return result;
 		this.sql.exec(
 			"INSERT INTO daily_counters (day, key, count) VALUES (?, ?, 1) ON CONFLICT (day, key) DO UPDATE SET count = count + 1",
 			day(now),
@@ -86,6 +107,15 @@ export class UserDO extends DurableObject<Env> {
 		const rev = Number(this.meta("rev") ?? "0") + 1;
 		this.setMeta("rev", String(rev));
 		return rev;
+	}
+
+	/** Running total of the stored JSON bytes of live recipes; set up from the table once for objects that predate it. */
+	private recipeBytes(): number {
+		const stored = this.meta("recipe_bytes");
+		if (stored !== null) return Number(stored);
+		const total = this.sql.exec<{ n: number }>("SELECT coalesce(sum(length(CAST(json AS BLOB))), 0) AS n FROM recipes WHERE deleted = 0").one().n;
+		this.setMeta("recipe_bytes", String(total));
+		return total;
 	}
 
 	private capBytes(): number {
@@ -143,7 +173,7 @@ export class UserDO extends DurableObject<Env> {
 					suspension: state === "suspended" ? { reason: this.meta("suspension_reason") } : null,
 					entitlement: { active: entitlement.active, expiresAt: entitlement.expiresAt },
 					// monthUsed: imports and their usage table arrive in M2; until then no import can have been counted.
-					quota: { freeImportUsed: this.meta("free_import_used_at") !== null, monthUsed: 0, monthLimit: MONTH_LIMIT },
+					quota: { freeImportUsed: this.meta("free_import_used_at") !== null, monthUsed: this.monthUsed(Date.now()), monthLimit: MONTH_LIMIT },
 					storage: { usedBytes: this.usedBytes(), capBytes: this.capBytes() },
 					consentVersion: consent === null ? null : Number(consent),
 				},
@@ -180,6 +210,14 @@ export class UserDO extends DurableObject<Env> {
 			if (!live && this.sql.exec<{ n: number }>("SELECT count(*) AS n FROM recipes WHERE deleted = 0").one().n >= MAX_RECIPES) {
 				return error(409, "recipe_limit", `at most ${MAX_RECIPES} recipes`);
 			}
+			const json = JSON.stringify(input);
+			const size = utf8Length(json);
+			const oldSize = live && existing.json !== null ? utf8Length(existing.json) : 0;
+			const total = this.recipeBytes();
+			// Bounds what a full pull holds on the phone; an update that does not grow always passes.
+			if (size > oldSize && total - oldSize + size > RECIPE_STORAGE_CAP) {
+				return error(413, "recipe_storage_cap", "stored recipe text would exceed 20 MB");
+			}
 			const stored = new Set(this.sql.exec<{ id: string }>("SELECT id FROM images WHERE recipe_id = ?", input.id).toArray().map((r) => r.id));
 			if (input.imageIds.some((id) => !stored.has(id))) return error(400, "invalid_body", "imageIds lists an image not uploaded to this recipe");
 			for (const id of stored) if (!input.imageIds.includes(id)) this.sql.exec("DELETE FROM images WHERE id = ?", id);
@@ -189,18 +227,22 @@ export class UserDO extends DurableObject<Env> {
 				input.id,
 				rev,
 				now,
-				JSON.stringify(input),
+				json,
 			);
-			return { status: 200, body: toRecipe({ id: input.id, rev, deleted: 0, updated_at: now, json: JSON.stringify(input) }) };
+			this.setMeta("recipe_bytes", String(total - oldSize + size));
+			return { status: 200, body: toRecipe({ id: input.id, rev, deleted: 0, updated_at: now, json }) };
 		}, true);
 	}
 
 	deleteRecipe(secretHash: string, id: string): Promise<Result> {
 		return this.run("recipes", secretHash, async (now) => {
-			const existing = this.sql.exec<{ deleted: number }>("SELECT deleted FROM recipes WHERE id = ?", id).toArray()[0];
+			const existing = this.sql.exec<{ deleted: number; json: string | null }>("SELECT deleted, json FROM recipes WHERE id = ?", id).toArray()[0];
 			if (!existing) return error(404, "not_found", "recipe not found");
 			if (existing.deleted === 0) {
+				const freed = existing.json === null ? 0 : utf8Length(existing.json);
+				const total = this.recipeBytes();
 				this.sql.exec("UPDATE recipes SET rev = ?, deleted = 1, updated_at = ?, json = NULL WHERE id = ?", this.nextRev(), now, id);
+				this.setMeta("recipe_bytes", String(total - freed));
 				this.sql.exec("DELETE FROM images WHERE recipe_id = ?", id);
 				await this.scheduleExpiry(now + MARKER_TTL_MS);
 			}
@@ -244,6 +286,216 @@ export class UserDO extends DurableObject<Env> {
 		});
 	}
 
+	// ---- AI consent ----
+
+	setConsent(secretHash: string, version: number): Promise<Result> {
+		return this.run("me", secretHash, () => {
+			if (version !== AI_NOTICE_VERSION) return error(400, "consent_version_unknown", `the current AI notice version is ${AI_NOTICE_VERSION}`);
+			this.setMeta("consent_version", String(version));
+			return { status: 200, body: { consentVersion: version } };
+		}, true);
+	}
+
+	clearConsent(secretHash: string): Promise<Result> {
+		return this.run("me", secretHash, () => {
+			this.sql.exec("DELETE FROM meta WHERE key = 'consent_version'");
+			return { status: 204 };
+		}, true);
+	}
+
+	private consentVersion(): number | null {
+		const v = this.meta("consent_version");
+		return v === null ? null : Number(v);
+	}
+
+	// ---- quota (plan 4.5 step 7, 4.6) ----
+
+	private monthUsed(now: number): number {
+		return this.sql.exec<{ count: number }>("SELECT count FROM usage WHERE period = ?", month(now)).toArray()[0]?.count ?? 0;
+	}
+
+	/** Subscription state as stored; M3 writes it from RevenueCat. Until then nothing in production sets it. */
+	private subscribed(now: number): boolean {
+		const e = JSON.parse(this.meta("entitlement") ?? '{"active":false,"expiresAt":null}') as { active: boolean; expiresAt: string | null };
+		return e.active && (e.expiresAt === null || now < Date.parse(e.expiresAt));
+	}
+
+	/** Charges one unit: the free lifetime unit first, then a monthly unit while subscribed. Null when none is left. */
+	private reserve(now: number): { charge: "free" | "month"; period: string | null } | null {
+		if (this.meta("free_import_used_at") === null) {
+			this.setMeta("free_import_used_at", String(now));
+			return { charge: "free", period: null };
+		}
+		if (this.subscribed(now) && this.monthUsed(now) < MONTH_LIMIT) {
+			this.sql.exec("INSERT INTO usage (period, count) VALUES (?, 1) ON CONFLICT (period) DO UPDATE SET count = count + 1", month(now));
+			return { charge: "month", period: month(now) };
+		}
+		return null;
+	}
+
+	private refund(job: JobRow): void {
+		if (job.charge === "month" && job.period) {
+			this.sql.exec("UPDATE usage SET count = max(count - 1, 0) WHERE period = ?", job.period);
+		} else if (job.charge === "free") {
+			// At most FREE_REFUND_LIMIT refunds in an account's life; after that the free unit stays consumed.
+			const refunds = Number(this.meta("free_import_refunds") ?? "0");
+			if (refunds < FREE_REFUND_LIMIT) {
+				this.setMeta("free_import_refunds", String(refunds + 1));
+				this.sql.exec("DELETE FROM meta WHERE key = 'free_import_used_at'");
+			}
+		}
+	}
+
+	private attemptsToday(now: number): number {
+		return this.sql.exec<{ count: number }>("SELECT count FROM attempts WHERE day = ?", day(now)).toArray()[0]?.count ?? 0;
+	}
+
+	// ---- import jobs ----
+
+	private jobView(job: JobRow): Result {
+		const kind = job.kind.replace("import_", "");
+		const draft = job.status === "done" && job.result_json ? JSON.parse(job.result_json) : null;
+		return { status: 0, body: { id: job.job_key, kind, status: job.status, createdAt: isoTime(job.created_at), draft } };
+	}
+
+	private job(key: string): JobRow | undefined {
+		return this.sql.exec<JobRow>("SELECT * FROM jobs WHERE job_key = ?", key).toArray()[0];
+	}
+
+	startImport(secretHash: string, jobKey: string, input: ImportInput): Promise<Result> {
+		return this.run("imports", secretHash, async (now) => {
+			const existing = this.job(jobKey);
+			if (existing) return { ...this.jobView(existing), status: 202 };
+			if (this.consentVersion() !== AI_NOTICE_VERSION) return error(403, "consent_required", "accept the AI notice first");
+			if (this.sql.exec("SELECT 1 FROM jobs WHERE status IN ('pending', 'running')").toArray().length) {
+				return error(409, "job_running", "another import is still running");
+			}
+			if (this.attemptsToday(now) >= ATTEMPTS_PER_DAY) {
+				this.event({ event: "quota_denied", reason: "attempt_limit" });
+				return error(429, "attempt_limit", "too many failed imports today");
+			}
+			const unit = this.reserve(now);
+			if (!unit) {
+				this.event({ event: "quota_denied", reason: "quota_exhausted" });
+				return error(402, "quota_exhausted", "no import left");
+			}
+			this.sql.exec(
+				"INSERT INTO jobs (job_key, kind, status, input, input_blob, created_at, charge, period) VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)",
+				jobKey,
+				`import_${input.kind}`,
+				input.kind === "url" ? input.url : input.kind === "text" ? input.text : null,
+				input.kind === "photo" ? input.bytes : null,
+				now,
+				unit.charge,
+				unit.period,
+			);
+			await schedule(this.ctx.storage, { id: `job:${jobKey}`, kind: "job", dueAt: now, payload: jobKey });
+			await schedule(this.ctx.storage, { id: `job_timeout:${jobKey}`, kind: "job_timeout", dueAt: now + JOB_TIMEOUT_MS, payload: jobKey });
+			return { ...this.jobView(this.job(jobKey)!), status: 202 };
+		}, true);
+	}
+
+	getJob(secretHash: string, jobKey: string): Promise<Result> {
+		return this.run("jobs", secretHash, (now) => {
+			const job = this.job(jobKey);
+			if (!job || job.created_at < now - JOB_RESULT_DAYS * DAY_MS) return error(404, "not_found", "job not found");
+			return { ...this.jobView(job), status: 200 };
+		});
+	}
+
+	report(secretHash: string, r: { kind: string; jobId: string; reason: string; note: string }): Promise<Result> {
+		return this.run("reports", secretHash, async (now) => {
+			if (!this.job(r.jobId)) return error(404, "not_found", "job not found");
+			const inserted = this.sql.exec(
+				"INSERT INTO reports (at, kind, job_key, reason, note) VALUES (?, ?, ?, ?, ?) ON CONFLICT (job_key, kind) DO NOTHING",
+				now,
+				r.kind,
+				r.jobId,
+				r.reason,
+				r.note,
+			);
+			if (inserted.rowsWritten === 0) return { status: 204 };
+			this.event({ event: "report", kind: r.kind, reason: r.reason });
+			await this.scheduleExpiry(now + REPORT_DAYS * DAY_MS);
+			return { status: 204 };
+		}, true);
+	}
+
+	/** Ends a job in exactly one outcome, in one synchronous step: status, refund, attempt count, input removed. */
+	private finish(job: JobRow, outcome: ImportOutcome | { status: "failed" }, now: number): void {
+		const draft = outcome.status === "done" ? JSON.stringify((outcome as { draft: unknown }).draft) : null;
+		this.sql.exec(
+			"UPDATE jobs SET status = ?, result_json = ?, input = NULL, input_blob = NULL, ended_at = ? WHERE job_key = ?",
+			outcome.status,
+			draft,
+			now,
+			job.job_key,
+		);
+		if (outcome.status !== "done") this.refund(job);
+		if (outcome.status === "guard_block" || outcome.status === "no_recipe" || outcome.status === "invalid") {
+			this.sql.exec("INSERT INTO attempts (day, count) VALUES (?, 1) ON CONFLICT (day) DO UPDATE SET count = count + 1", day(now));
+		}
+		this.sql.exec("DELETE FROM tasks WHERE id IN (?, ?)", `job:${job.job_key}`, `job_timeout:${job.job_key}`);
+		this.event({ event: "import_outcome", kind: job.kind, outcome: outcome.status, durationMs: now - job.created_at });
+	}
+
+	/** The Workers AI binding; the local entry's subclass supplies a stand-in where the environment has none. */
+	protected models(): { AI?: ModelRunner } {
+		return this.env;
+	}
+
+	private async pipeline(job: JobRow): Promise<ImportOutcome> {
+		// Read at every model call, so a withdrawal while the page is fetched stops the model call.
+		const consent = () => this.consentVersion();
+		const ai = this.models();
+		if (job.kind === "import_url") {
+			const page = await fetchPage(job.input!);
+			if (!page.ok) {
+				if (page.transient) throw new Error(`fetch failed: ${page.reason}`);
+				return { status: "no_recipe" };
+			}
+			return structureRecipe(ai, consent, page.text, { sourceType: "url", sourceUrl: job.input });
+		}
+		if (job.kind === "import_photo") {
+			const transcript = await transcribePhoto(ai, consent, job.input_blob!);
+			if (transcript.status !== "text") return { status: transcript.status };
+			return structureRecipe(ai, consent, transcript.text, { sourceType: "photo", sourceUrl: null });
+		}
+		return structureRecipe(ai, consent, job.input!, { sourceType: "photo", sourceUrl: null });
+	}
+
+	/** Alarm task: runs a job. A transient error is retried by the dispatcher; the third failure ends it as failed. */
+	async runJob(jobKey: string, now: number, attempts: number): Promise<void> {
+		const job = this.job(jobKey);
+		if (!job || !OPEN.includes(job.status)) return;
+		// Tries already used up (also by runs the runtime killed), timed out, or consent withdrawn: end it now.
+		if (attempts >= JOB_TRIES || now - job.created_at >= JOB_TIMEOUT_MS || this.consentVersion() !== AI_NOTICE_VERSION) {
+			this.finish(job, { status: "failed" }, now);
+			return;
+		}
+		this.sql.exec("UPDATE jobs SET status = 'running' WHERE job_key = ?", jobKey);
+		let outcome: ImportOutcome;
+		try {
+			outcome = await this.pipeline(job);
+		} catch (e) {
+			if (e instanceof ConsentRequired || attempts + 1 >= JOB_TRIES) {
+				// Re-read: the job may have ended (timeout) while the pipeline was awaiting.
+				const current = this.job(jobKey);
+				if (current && OPEN.includes(current.status)) this.finish(current, { status: "failed" }, Date.now());
+				return;
+			}
+			throw e;
+		}
+		// The job may have timed out while the model was running; the first outcome wins.
+		const current = this.job(jobKey);
+		if (current && OPEN.includes(current.status)) this.finish(current, outcome, Date.now());
+	}
+
+	timeoutJob(jobKey: string, now: number): void {
+		const job = this.job(jobKey);
+		if (job && OPEN.includes(job.status)) this.finish(job, { status: "failed" }, now);
+	}
+
 	// ---- tasks ----
 
 	private scheduleExpiry(dueAt: number): Promise<void> {
@@ -255,25 +507,41 @@ export class UserDO extends DurableObject<Env> {
 		this.sql.exec("DELETE FROM sessions WHERE expires_at <= ?", now);
 		this.sql.exec("DELETE FROM used_nonces WHERE expires_at <= ?", now);
 		this.sql.exec("DELETE FROM daily_counters WHERE day < ?", day(now - COUNTER_DAYS * DAY_MS));
+		this.sql.exec("DELETE FROM attempts WHERE day < ?", day(now - DAY_MS));
+		this.sql.exec("DELETE FROM jobs WHERE created_at <= ? AND status NOT IN ('pending', 'running')", now - JOB_RESULT_DAYS * DAY_MS);
+		this.sql.exec("DELETE FROM reports WHERE at <= ?", now - REPORT_DAYS * DAY_MS);
 		const horizon = now - MARKER_TTL_MS;
 		const purged = this.sql.exec<{ rev: number | null }>("SELECT max(rev) AS rev FROM recipes WHERE deleted = 1 AND updated_at <= ?", horizon).one().rev;
 		if (purged !== null) {
 			this.setMeta("purged_rev", String(Math.max(purged, Number(this.meta("purged_rev") ?? "0"))));
 			this.sql.exec("DELETE FROM recipes WHERE deleted = 1 AND updated_at <= ?", horizon);
+			// Markers hold no JSON, so purging them leaves recipe_bytes unchanged.
 		}
 		const next = this.sql
 			.exec<{ at: number | null }>(
 				`SELECT min(at) AS at FROM (
 					SELECT min(expires_at) AS at FROM sessions UNION ALL
 					SELECT min(expires_at) FROM used_nonces UNION ALL
-					SELECT min(updated_at) + ? FROM recipes WHERE deleted = 1)`,
+					SELECT min(updated_at) + ? FROM recipes WHERE deleted = 1 UNION ALL
+					SELECT min(created_at) + ? FROM jobs UNION ALL
+					SELECT min(at) + ? FROM reports)`,
 				MARKER_TTL_MS,
+				JOB_RESULT_DAYS * DAY_MS,
+				REPORT_DAYS * DAY_MS,
 			)
 			.one().at;
 		if (next !== null) await schedule(this.ctx.storage, { id: "expiry", kind: "expiry", dueAt: next });
 	}
 
 	async alarm(): Promise<void> {
-		await runDueTasks(this.ctx.storage, { expiry: (_payload, now) => this.expire(now) }, Date.now());
+		await runDueTasks(
+			this.ctx.storage,
+			{
+				expiry: (_payload, now) => this.expire(now),
+				job: (payload, now, attempts) => this.runJob(payload!, now, attempts),
+				job_timeout: (payload, now) => this.timeoutJob(payload!, now),
+			},
+			Date.now(),
+		);
 	}
 }

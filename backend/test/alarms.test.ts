@@ -1,5 +1,5 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { migrate } from "../src/storage/migrations";
 import { armAlarm, backoff, runDueTasks, schedule } from "../src/storage/tasks";
 
@@ -107,5 +107,33 @@ describe("alarm rules (plan 4.3)", () => {
 			await armAlarm(state.storage);
 			expect(await state.storage.getAlarm()).toBe(at);
 		});
+	});
+
+	it("a handler killed by the runtime still uses up a try (F1)", async () => {
+		const name = "killed";
+		await withSchema(name, async (state) => {
+			await schedule(state.storage, { id: "k", kind: "kill", dueAt: Date.now() - 1 });
+		});
+		await expect(
+			runInDurableObject(stub(name), async (_i, state) => {
+				await runDueTasks(state.storage, { kill: () => state.abort("simulated CPU limit") }, Date.now());
+			}),
+		).rejects.toThrow();
+		const attempts = await runInDurableObject(stub(name), (_i, state) => state.storage.sql.exec("SELECT attempts FROM tasks WHERE id = 'k'").one().attempts);
+		expect(attempts).toBe(1);
+	});
+
+	it("a failing task logs its error name, never the message (F8)", async () => {
+		const logged: string[] = [];
+		const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+			logged.push(args.map(String).join(" "));
+		});
+		await withSchema("logs", async (state) => {
+			await schedule(state.storage, { id: "t", kind: "x", dueAt: Date.now() - 1 });
+			await runDueTasks(state.storage, { x: () => { throw new TypeError("Kartoffelsalat with secret user text"); } }, Date.now());
+		});
+		spy.mockRestore();
+		expect(logged.join("\n")).toContain("TypeError");
+		expect(logged.join("\n")).not.toContain("secret user text");
 	});
 });

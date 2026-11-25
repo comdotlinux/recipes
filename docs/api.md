@@ -91,7 +91,7 @@ Order of checks in `POST /session`: body, age confirmation, Turnstile, nonce sig
 | Route | Request | Success | Errors |
 |-------|---------|---------|--------|
 | `GET /recipes?since=<rev>` | `since` optional, default 0 | 200 `{ "recipes": [Recipe or deletion marker], "rev": <cursor>, "more": <boolean> }`, ordered by `rev`, at most 200 entries per response | 410 `cursor_expired` when `since` is older than the purge horizon (the client then pulls with `since=0` and replaces its cache) |
-| `PUT /recipes/:id` | `RecipeInput` (its `id` must equal the id in the path); header `If-None-Match: *` to create or `If-Match: "<rev>"` to update | 200 `Recipe` | 428 `precondition_required` (neither header); 412 `precondition_failed` (exists on create, or stale rev); 404 `not_found` (update of an id this user never had); 413 `recipe_too_large` (body over 64 KB); 409 `recipe_limit` (2,000 recipes); 400 `invalid_body` |
+| `PUT /recipes/:id` | `RecipeInput` (its `id` must equal the id in the path); header `If-None-Match: *` to create or `If-Match: "<rev>"` to update | 200 `Recipe` | 428 `precondition_required` (neither header); 412 `precondition_failed` (exists on create, or stale rev); 404 `not_found` (update of an id this user never had); 413 `recipe_too_large` (body over 64 KB); 413 `recipe_storage_cap` (the user's stored recipe text would exceed 20 MB); 409 `recipe_limit` (2,000 recipes); 400 `invalid_body` |
 | `DELETE /recipes/:id` | none | 204, also when already deleted | 404 when the id never existed |
 | `PUT /recipes/:id/images/:imageId` | raw bytes; `Content-Type` `image/jpeg`, `image/png` or `image/webp` | 201 `{ "id": "<imageId>", "size": 12345, "mime": "image/jpeg" }` | 404 (recipe); 413 `image_too_large` (over 1,572,864 bytes); 413 `storage_cap`; 409 `image_limit` (a sixth image); 415 `unsupported_media_type` (magic bytes do not match an allowed type) |
 | `GET /images/:imageId` | none | 200 bytes with the stored `Content-Type`, `Cache-Control: private, immutable, max-age=31536000`, `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` | 404 |
@@ -104,6 +104,7 @@ Rules:
 - A create on an id that exists only as a deletion marker succeeds and revives the recipe.
 - Uploading an image does not attach it; the recipe's `imageIds` decides which images belong to it. Images of a recipe that are no longer listed are removed when the recipe is saved.
 - Storage cap: 52,428,800 bytes for free users, 524,288,000 for subscribers, counted over image bytes.
+- Recipe text cap: the stored JSON of a user's live recipes may total at most 20,971,520 bytes (UTF-8), so a full pull fits in a phone's memory. A create or an update that would grow the total past it answers 413 `recipe_storage_cap`; an update that keeps or shrinks a recipe always passes, and deleting a recipe frees its share at once.
 - Deletion markers are purged after 90 days.
 
 ### Turnstile page
@@ -118,6 +119,69 @@ The page calls whichever of the two exists. It loads script and frames only from
 ### Rate limits
 
 `POST /session/nonce` and `POST /session` are limited per IP address. Writes are limited per user. A limited request gets 429 `rate_limited`.
+
+## Milestone M2
+
+### AI consent
+
+| Route | Request | Success | Errors |
+|-------|---------|---------|--------|
+| `PUT /me/consent` | `{ "version": 1 }` (the AI notice version the user accepted) | 200 `{ "consentVersion": 1 }` | 400 `consent_version_unknown` (not the current notice version); 400 `invalid_body` |
+| `DELETE /me/consent` | none | 204 | |
+
+`GET /me` shows `consentVersion` (null until accepted). Without the current version, `POST /imports` answers 403 `consent_required`, and no model is ever called.
+
+### Imports
+
+`POST /imports` needs the header `Idempotency-Key: <lowercase UUID>`, chosen by the client. That key is the job id: repeating the request with the same key returns the same job (202 again) and charges nothing more. Three input kinds, all costing one unit and all going through the same structuring step:
+
+| Kind | Body | Limits |
+|------|------|--------|
+| `url` | `Content-Type: application/json`, `{ "kind": "url", "url": "https://..." }` | `http` or `https`, at most 2,048 characters; the server fetches the page (at most 2 MB, `text/html` only, at most 3 redirects, 10 s) |
+| `text` | `Content-Type: application/json`, `{ "kind": "text", "text": "..." }` | 1 to 20,000 characters; the default photo path: text recognised on the phone, the picture never leaves the device |
+| `photo` | `Content-Type: image/jpeg`, raw JPEG bytes | at most 1,572,864 bytes, longest side 2,048 px (client side); for pictures the device cannot read (handwriting, unsupported script) |
+
+| Route | Success | Errors |
+|-------|---------|--------|
+| `POST /imports` | 202 `ImportJob` with `status: "pending"` | 400 `invalid_body`; 400 `invalid_id` (Idempotency-Key); 400 `invalid_url` (rejected by the URL rules before any fetch); 402 `quota_exhausted`; 403 `consent_required`; 409 `job_running` (another import of this user is still open); 411 `length_required`; 413 `text_too_large`; 413 `image_too_large`; 415 `unsupported_media_type` (not JSON, or not a JPEG by its magic bytes); 429 `attempt_limit` (10 counted attempts today, UTC); 429 `rate_limited` |
+| `GET /jobs/:id` | 200 `ImportJob` | 404 (unknown, another user's, or older than 7 days) |
+
+```jsonc
+// ImportJob
+{
+  "id": "4c0e9a1b-7d2f-4e3a-9b8c-1f2e3d4c5b6a",   // the Idempotency-Key
+  "kind": "url",                                  // "url" | "text" | "photo"
+  "status": "done",                               // "pending" | "running" | "done" | "guard_block" | "no_recipe" | "invalid" | "failed"
+  "createdAt": "2026-11-24T18:00:00Z",
+  "draft": { /* RecipeInput, only when status is "done", otherwise null */ }
+}
+```
+
+- The client polls every 2 seconds until the status is no longer `pending` or `running`. Every job ends in exactly one of the five outcomes; a job still open after 10 minutes ends as `failed`.
+- The draft is a `RecipeInput` with a new server-generated `id`, `sourceType` `"url"` (with `sourceUrl`) or `"photo"` (for `text` and `photo`), and `imageIds: []`. Nothing is saved: the app opens the draft in the edit form, and the user saves it with the normal `PUT /recipes/:id` and `If-None-Match: *`.
+- Outcomes and the unit: `done` keeps the charge. `guard_block` (blocked by the safety filter), `no_recipe` (the input is not a recipe) and `invalid` (the result failed validation) refund the unit and count one attempt. `failed` (model or network error after 3 tries, or the 10-minute timeout) refunds without counting an attempt.
+- Units: the free lifetime import is used first. Monthly units (30 per UTC month) apply only while `entitlement.active` is true, which needs the subscription (M3). The free unit is refunded at most 5 times in an account's life; after that the next import consumes it whatever the outcome.
+- The job's input (URL, text or photo) is deleted when the job ends. Results are kept 7 days.
+
+### Reports
+
+| Route | Request | Success | Errors |
+|-------|---------|---------|--------|
+| `POST /reports` | `Report` | 204 | 400 `invalid_body`; 404 (the job does not exist for this user); 429 `rate_limited` |
+
+```jsonc
+// Report
+{
+  "kind": "import_result",        // later milestones add "translation" and "share"
+  "jobId": "4c0e9a1b-7d2f-4e3a-9b8c-1f2e3d4c5b6a",
+  "reason": "wrong_content",      // "wrong_content" | "offensive" | "other"
+  "note": ""                      // 0..1000 characters, optional
+}
+```
+
+### Quota in `GET /me`
+
+`quota.freeImportUsed` is true while the free unit is consumed (it becomes false again after a refund). `quota.monthUsed` counts this UTC month's monthly units; `quota.monthLimit` is 30 and applies only while `entitlement.active` is true.
 
 ## Module boundaries
 
@@ -204,3 +268,81 @@ class NewImage(val id: String, val bytes: ByteArray)
 ```
 
 `Recipe` and `RecipeInput` are `@Serializable` data classes with exactly the fields of the JSON above, in `data/Recipe.kt`.
+
+### Client, milestone M2: `data/ImportRepositories.kt` and `platform/TextRecognizer.kt`
+
+```kotlin
+sealed interface ImportSource {
+    data class Link(val url: String) : ImportSource
+    /** JPEG of at most 1.5 MB, longest side 2,048 px. The repository reads it on the device first. */
+    class Photo(val jpeg: ByteArray) : ImportSource
+}
+
+sealed interface ImportStart {
+    data class Started(val jobId: String) : ImportStart
+    data object ConsentRequired : ImportStart            // 403 consent_required
+    data object QuotaExhausted : ImportStart             // 402 quota_exhausted
+    data object AttemptLimit : ImportStart               // 429 attempt_limit
+    data object AlreadyRunning : ImportStart             // 409 job_running; activeJob holds it
+    data object Offline : ImportStart                    // no connection or a 5xx answer
+    data class Rejected(val code: String) : ImportStart  // invalid_url, text_too_large, image_too_large, ...
+}
+
+sealed interface ImportOutcome {
+    data class Done(val draft: RecipeInput) : ImportOutcome
+    data object GuardBlocked : ImportOutcome
+    data object NoRecipe : ImportOutcome
+    data object Invalid : ImportOutcome
+    data object Failed : ImportOutcome
+}
+
+/** The one open job. It survives leaving the screen and an app restart (the job id is kept in the cache settings). */
+data class ImportJobState(val jobId: String, val kind: String, val outcome: ImportOutcome?, val offline: Boolean)
+
+data class Quota(val freeImportUsed: Boolean, val monthUsed: Int, val monthLimit: Int, val entitled: Boolean)
+
+enum class ReportReason { WrongContent, Offensive, Other }
+
+interface ImportRepository {
+    val activeJob: StateFlow<ImportJobState?>
+    /** `jobId` is the Idempotency-Key. The caller keeps it across retries after Offline, so nothing is charged twice. */
+    suspend fun start(source: ImportSource, jobId: String): ImportStart
+    /** Polls `GET /jobs/:id` every 2 seconds into `activeJob` until an outcome arrives; keeps retrying while offline. */
+    suspend fun resume()
+    /** Clears `activeJob` after the user has opened or dismissed the outcome. */
+    fun acknowledge(jobId: String)
+    /** From `GET /me`; null when offline. */
+    suspend fun quota(): Quota?
+    suspend fun report(jobId: String, reason: ReportReason, note: String): Boolean
+}
+
+sealed interface ConsentState {
+    data object Unknown : ConsentState
+    data object NotGiven : ConsentState
+    data class Given(val version: Int) : ConsentState
+}
+
+interface ConsentRepository {
+    val state: StateFlow<ConsentState>
+    /** The notice version this build shows. */
+    val currentVersion: Int
+    suspend fun accept(): Boolean      // PUT /me/consent
+    suspend fun withdraw(): Boolean    // DELETE /me/consent
+}
+
+sealed interface Recognition {
+    data class Text(val text: String) : Recognition
+    data object Unreadable : Recognition
+}
+
+/** Google ML Kit on Android, Apple Vision on iOS. On this path the picture never leaves the device. */
+interface TextRecognizer {
+    suspend fun recognize(jpeg: ByteArray): Recognition
+}
+```
+
+Rules:
+- `ImportSource.Photo`: the repository runs `TextRecognizer` first. Readable text is sent as kind `text`; `Unreadable`, or text shorter than the hand-over threshold, sends the JPEG as kind `photo`. The threshold is one constant in the repository and is set from the bake-off numbers.
+- The app sends nothing to an import route before `ConsentState` is `Given` for `currentVersion`.
+- Signing out, and any 401, ends the open job locally and clears `activeJob`.
+- Not in M2: receiving a link shared from another app (Android share intent, iOS share extension).
