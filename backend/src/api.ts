@@ -42,6 +42,11 @@ const turnstilePage = (siteKey: string) => `<!doctype html>
 </html>
 `;
 
+/** Android application id and iOS bundle id of the app (owner, 2026-11-25). */
+const APP_ID = "com.linux.recipes";
+const CERT_FINGERPRINT = /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/;
+const LANDING_CSP = "default-src 'none'; script-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
 const reply = (c: C, r: Result) => {
 	c.res = toResponse(r);
 	return c.res;
@@ -170,6 +175,37 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 		c.header("content-security-policy", TURNSTILE_CSP);
 		c.header("x-content-type-options", "nosniff");
 		return c.html(turnstilePage(siteKey));
+	});
+
+	// docs/api.md "Milestone M5": a share link opened without the app. The page is static and shows nothing of the recipe;
+	// no-referrer keeps the token in the path from leaking to the store pages it links to.
+	app.get("/s/:token", async (c) => {
+		const page = await c.env.ASSETS.fetch(new URL("/s/", c.req.url));
+		return new Response(page.body, {
+			status: page.ok ? 200 : 404,
+			headers: {
+				"content-type": "text/html; charset=utf-8",
+				"content-security-policy": LANDING_CSP,
+				"x-content-type-options": "nosniff",
+				"referrer-policy": "no-referrer",
+				"cache-control": "public, max-age=3600",
+			},
+		});
+	});
+
+	// App Links and Universal Links for share links. The values come from the environment at request time and are filled
+	// by the provisioning step; until then (or when malformed) the files answer 404.
+	app.get("/.well-known/assetlinks.json", (c) => {
+		const prints = (c.env.ANDROID_CERT_SHA256 ?? "").split(",").map((p) => p.trim().toUpperCase());
+		if (!prints.every((p) => CERT_FINGERPRINT.test(p))) return fail(c, 404, "not_found", "ANDROID_CERT_SHA256 is not set");
+		return c.json([
+			{ relation: ["delegate_permission/common.handle_all_urls"], target: { namespace: "android_app", package_name: APP_ID, sha256_cert_fingerprints: prints } },
+		]);
+	});
+	app.get("/.well-known/apple-app-site-association", (c) => {
+		const team = c.env.APPLE_TEAM_ID ?? "";
+		if (!/^[A-Z0-9]{10}$/.test(team)) return fail(c, 404, "not_found", "APPLE_TEAM_ID is not set");
+		return c.json({ applinks: { details: [{ appIDs: [`${team}.${APP_ID}`], components: [{ "/": "/s/*", comment: "share links" }] }] } });
 	});
 
 	app.post("/v1/session/nonce", async (c) => {

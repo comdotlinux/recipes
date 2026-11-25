@@ -334,6 +334,18 @@ Rules:
 - A report of a shared recipe revokes the link at once. Reporting the same link again answers 204 and changes nothing.
 - The response of `POST /recipes/:id/shares` is the only time the app sees the token; the owner keeps `shareId` to revoke the link. There is no list of an owner's links in this milestone.
 
+### App links and the landing page
+
+Served by the Worker, not under `/v1`:
+
+| Path | Content |
+|------|---------|
+| `GET /s/<token>` | static page `backend/public/s/index.html`: says a recipe was shared and offers to open the app; shows nothing of the recipe. Headers: `Content-Security-Policy: default-src 'none'; script-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`. Its only script, `/share-landing.js`, turns the button into an Android intent link for the same URL (package `com.linux.recipes`, falling back to Google Play) |
+| `GET /.well-known/assetlinks.json` | Android App Links statement for package `com.linux.recipes` with the fingerprints in the Worker variable `ANDROID_CERT_SHA256` (comma-separated, `AA:BB:...` form, 32 bytes each) |
+| `GET /.well-known/apple-app-site-association` | Universal Links for app id `<APPLE_TEAM_ID>.com.linux.recipes`, path `/s/*`, from the Worker variable `APPLE_TEAM_ID` (10 characters) |
+
+Both `.well-known` files are JSON (`application/json`), without redirects, as the Android and Apple documentation require. They answer 404 while their variable is unset or malformed: the signing certificate fingerprint (Play App Signing) and the Apple team id are filled in by the provisioning step. App side: Android declares an `autoVerify` intent filter for `https://<host>/s/*`; iOS adds the associated domain `applinks:<host>`. The bundle id `com.linux.recipes` is assumed to be the same on both platforms.
+
 ## Module boundaries
 
 These signatures let people work on both sides at once. Change them only together with this section.
