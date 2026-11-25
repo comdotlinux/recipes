@@ -19,6 +19,8 @@ import com.linux.recipes.data.ImportRepository
 import com.linux.recipes.data.RecipeRepository
 import com.linux.recipes.data.SessionRepository
 import com.linux.recipes.data.SessionState
+import com.linux.recipes.data.TranslationRepository
+import com.linux.recipes.ui.translate.TranslateViewModel
 import com.linux.recipes.ui.detail.RecipeDetailScreen
 import com.linux.recipes.ui.detail.RecipeDetailViewModel
 import com.linux.recipes.ui.edit.RecipeEditScreen
@@ -34,6 +36,9 @@ import com.linux.recipes.ui.settings.SettingsViewModel
 import com.linux.recipes.ui.signin.SignInScreen
 import com.linux.recipes.ui.signin.SignInViewModel
 import com.linux.recipes.ui.signin.TurnstileChallenge
+import com.linux.recipes.ui.share.IncomingShareLink
+import com.linux.recipes.ui.share.LocalSharing
+import com.linux.recipes.ui.share.SharePreviewScreen
 import kotlinx.serialization.Serializable
 
 @Serializable data object SignInRoute
@@ -46,6 +51,8 @@ import kotlinx.serialization.Serializable
 @Serializable data class ReviewImportRoute(val jobId: String)
 /** The editor on the draft of a photo read on the phone, held by the list's [ImportViewModel]; saving creates a new recipe. */
 @Serializable data object ReviewLocalRoute
+/** The preview of a shared recipe opened by link; the token stays on the device until it is sent in a request body. */
+@Serializable data class SharePreviewRoute(val token: String)
 
 /**
  * The whole app below the theme. [imports] and [consent] are the AI import; without both, no import entry is shown. Signed out, only the sign-in screen exists; signing in or out
@@ -58,6 +65,7 @@ fun RecipesNavHost(
     turnstile: TurnstileChallenge? = null,
     imports: ImportRepository? = null,
     consent: ConsentRepository? = null,
+    translations: TranslationRepository? = null,
     nav: NavHostController = rememberNavController(),
 ) {
     val ai = if (imports != null && consent != null) imports to consent else null
@@ -146,6 +154,7 @@ fun RecipesNavHost(
                 vm = viewModel { RecipeDetailViewModel(recipeRepository, id) },
                 onBack = { nav.popBackStack() },
                 onEdit = { nav.navigate(EditRoute(id)) },
+                translate = translations?.let { t -> consent?.let { c -> viewModel { TranslateViewModel(id, t, c) } } },
             )
         }
         composable<EditRoute> { entry ->
@@ -163,9 +172,23 @@ fun RecipesNavHost(
                 onClose = { nav.popBackStack() },
             )
         }
+        composable<SharePreviewRoute> { entry ->
+            val shares = LocalSharing.current?.shares
+            if (shares == null) {
+                LaunchedEffect(Unit) { nav.popBackStack() }
+                return@composable
+            }
+            SharePreviewScreen(
+                shares = shares,
+                token = entry.toRoute<SharePreviewRoute>().token,
+                onBack = { nav.popBackStack() },
+                onAccepted = { id -> nav.navigate(DetailRoute(id)) { popUpTo<SharePreviewRoute> { inclusive = true } } },
+            )
+        }
         composable<SettingsRoute> {
             val billing = LocalBilling.current
             SettingsScreen(viewModel { SettingsViewModel(sessionRepository, consent, imports, billing) }, onBack = { nav.popBackStack() })
         }
     }
+    IncomingShareLink(signedIn) { token -> nav.navigate(SharePreviewRoute(token)) }
 }

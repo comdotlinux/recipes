@@ -6,6 +6,7 @@ struct iOSApp: App {
     var body: some Scene {
         WindowGroup {
             ComposeView().ignoresSafeArea()
+                .onOpenURL { url in MainViewControllerKt.openShareLink(url: url.absoluteString) }
         }
     }
 }

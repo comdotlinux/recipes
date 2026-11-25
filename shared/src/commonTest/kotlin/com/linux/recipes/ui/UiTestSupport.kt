@@ -25,10 +25,15 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.unit.dp
 import com.linux.recipes.App
+import com.linux.recipes.data.BillingRepository
 import com.linux.recipes.platform.LocalTurnstileView
 import com.linux.recipes.ui.edit.LocalPictureActions
 import com.linux.recipes.ui.edit.PictureActions
 import com.linux.recipes.ui.signin.TurnstileChallenge
+import com.linux.recipes.ui.share.LocalFileActions
+import com.linux.recipes.ui.share.LocalSharing
+import com.linux.recipes.ui.share.SharingServices
+import com.linux.recipes.ui.theme.AppearanceStore
 
 class RecordingUriHandler : UriHandler {
     val opened = mutableListOf<String>()
@@ -61,18 +66,29 @@ fun ComposeUiTest.setApp(
     imports: FakeImportRepository? = null,
     consent: FakeConsentRepository? = null,
     turnstile: TurnstileChallenge? = null,
+    translations: FakeTranslationRepository? = null,
+    appearance: AppearanceStore? = null,
+    sharing: SharingServices? = null,
+    billing: BillingRepository? = null,
 ) {
     setScreen {
-        CompositionLocalProvider(LocalUriHandler provides uriHandler) {
-            App(session, recipes, darkTheme, turnstile, importRepository = imports, consentRepository = consent)
+        CompositionLocalProvider(LocalUriHandler provides uriHandler, LocalSharing provides sharing) {
+            App(
+                session, recipes, darkTheme, turnstile, importRepository = imports, consentRepository = consent,
+                billingRepository = billing, translationRepository = translations, appearance = appearance,
+            )
         }
     }
 }
 
-/** Picture launchers that do nothing and a Turnstile view that shows nothing; the gate is driven by the test. */
+/**
+ * Picture launchers that do nothing, a Turnstile view that shows nothing (the gate is driven by the test) and system
+ * dialogs (share sheet, save, open) that do nothing; a test that checks them provides its own [FakeFileActions].
+ */
 @Composable
 fun testDoubles(content: @Composable () -> Unit) = CompositionLocalProvider(
     LocalPictureActions provides PictureActions(takePhoto = {}, choose = {}),
+    LocalFileActions provides FakeFileActions().actions,
     LocalTurnstileView provides { _, _, modifier, _ -> Box(modifier) },
     content = content,
 )

@@ -16,9 +16,19 @@ import kotlinx.serialization.builtins.ListSerializer
  * Every file is written to a temporary name first and then renamed, so a crash never leaves half a file.
  */
 class RecipeCache(private val root: Path, private val fs: FileSystem = SystemFileSystem) {
-    /** [importJobId] and [importJobKind]: the open import job, kept so it survives an app restart. */
+    /**
+     * [importJobId] and [importJobKind]: the open job (import or translation), kept so it survives an app restart.
+     * [translationJobs]: the translation jobs this device started or followed, for reports. [displayLanguages]: the
+     * language each recipe is shown in, by recipe id, when it is not the original. All of it is account data.
+     */
     @Serializable
-    data class Settings(val cursor: Long = 0, val importJobId: String? = null, val importJobKind: String? = null)
+    data class Settings(
+        val cursor: Long = 0,
+        val importJobId: String? = null,
+        val importJobKind: String? = null,
+        val translationJobs: List<TranslationJobRef> = emptyList(),
+        val displayLanguages: Map<String, String> = emptyMap(),
+    )
 
     private val recipesFile = Path(root, "recipes.json")
     private val settingsFile = Path(root, "settings.json")

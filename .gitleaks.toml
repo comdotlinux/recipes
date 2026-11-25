@@ -1,0 +1,11 @@
+# gitleaks configuration: the default rules plus one narrow exception.
+[extend]
+useDefault = true
+
+# The share tokens in these three contract fixtures are real-shaped on purpose (107 characters), so that both the
+# backend and the app test against the true format. They are made with the public test key
+# `fixture-key-not-a-secret`; backend/test/fixtures-contract.test.ts fails if a token there does not open under
+# exactly that key. No other file is exempt.
+[[allowlists]]
+description = "Share tokens in contract fixtures, made with a public test key"
+paths = ['''^contract/fixtures/(share_created|share_token_body|report_share)\.json$''']

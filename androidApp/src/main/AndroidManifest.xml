@@ -9,7 +9,7 @@
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.NoActionBar"
+        android:theme="@style/Theme.Recipes"
         android:usesCleartextTraffic="false">
         <activity
             android:name=".MainActivity"
@@ -17,6 +17,15 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Share links https://<host>/s#<token> (docs/api.md, "App links and the landing page"); the host is API_BASE_URL's. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="${appLinksHost}" />
+                <data android:path="/s" />
             </intent-filter>
         </activity>
     </application>

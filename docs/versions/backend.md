@@ -71,3 +71,31 @@ Decisions about the mapping (security review M3, 2026-11-25):
 - Freshness: an answer is stored only if no refresh that started later stored one first (`entitlement_at`); an active record is re-read at most once a day even without a webhook, so a refund whose webhook was lost ends access within a day.
 
 UNVERIFIED until the owner connects the RevenueCat project: real responses of the v1 endpoint for a sandbox purchase (field presence, how a refund shows in `expires_date` and `refunded_at`), the exact header RevenueCat sends, and the restore behaviour setting named in plan 4.6.
+
+## Browser Run, PDF rendering (M5, checked 2026-11-25)
+
+The plan's "Browser Run" is the current product name (formerly Browser Rendering); docs at `https://developers.cloudflare.com/browser-run/`, read through Context7 (library id `/websites/developers_cloudflare_browser-run`) on 2026-11-25, and the generated runtime types (`BrowserRun`, `BrowserRunPDFOptions` in `backend/worker-configuration.d.ts`, workerd 1.20261123.1).
+
+| Fact | Value | Source |
+|------|-------|--------|
+| Binding | `"browser": { "binding": "BROWSER" }` in the Wrangler config; type `BrowserRun` | https://developers.cloudflare.com/browser-run/get-started/ |
+| Call | `env.BROWSER.quickAction("pdf", { html, ... })` returns a `Response`: 200 `application/pdf`, or JSON error 400, 422, 429, 500, 503; header `X-Browser-Ms-Used`. No API token with the binding. Needs compatibility date 2026-03-24 or later (ours: 2026-11-23) | https://developers.cloudflare.com/browser-run/quick-actions/pdf-endpoint/, runtime types |
+| JavaScript off | `setJavaScriptEnabled: false` (shared Quick Action option; the snapshot docs use it with `html` input) | https://developers.cloudflare.com/browser-run/quick-actions/snapshot/, runtime types |
+| Blocking requests | `rejectRequestPattern` / `allowRequestPattern` (regex strings; the docs' example is `"/^.*\\.(css)"`), `rejectResourceTypes`; `cacheTTL` (default 5 s, 0 disables) | pdf-endpoint page, runtime types |
+| Limits, Workers Paid | Quick Actions 30 requests per second per account; browser timeout 60 s; `PDFOptions.timeout` default 30 s, max 5 min; `goToOptions.timeout` max 60 s | https://developers.cloudflare.com/browser-run/limits/, https://developers.cloudflare.com/browser-run/reference/timeouts/ |
+| Pricing | Quick Actions are charged for browser hours only. Workers Free: 10 minutes per day. Workers Paid: 10 hours per month included, then $0.09 per hour | https://developers.cloudflare.com/browser-run/pricing/ |
+
+Cost finding and decision: a render of one inline recipe page should take about 1 to 3 seconds of browser time (estimate; `X-Browser-Ms-Used` gives the real figure once the owner runs it). The 10 included hours are about 12,000 to 36,000 renders a month for the whole account; beyond that a 2-second render costs about $0.00005 (5 US cents per 1,000 PDFs). One user at the cap of 20 a day uses at most about 20 minutes a month. That is not real money per call, so PDF stays free for every signed-in user, bounded by the per-user cap of 20 a day and the global `RL_GLOBAL` key `pdf`. On the Workers Free plan the 10 minutes a day would be about 300 renders a day for everyone; the production account is expected on Workers Paid (Durable Objects billing), which the owner confirms when logging in.
+
+Safety of the render (`backend/src/pdf.ts`): every recipe field is HTML-escaped; pictures are data URIs read from the user's own storage; the page carries the CSP `default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'`; the call passes `setJavaScriptEnabled: false`, `cacheTTL: 0` and the allow rule `allowRequestPattern: ["/^(data|about):/"]` (the documented counterpart of `rejectRequestPattern`; only data: and about: requests may load). Failed renders have their own cap of 40 per user and day. Session guardrails (`allowedDomains: []`) exist only for Browser Sessions, not for Quick Actions.
+
+UNVERIFIED until the owner logs in to Cloudflare: a real render (tests intercept the binding); whether the allow pattern is matched in the documented `/regex` form or as a plain regex, and that it does not block the inline page itself (the CSP and disabled JavaScript block remote loads either way); the real browser time per PDF; whether the local `wrangler dev` can reach the binding (env.local has none, so the route answers 503 there).
+
+## Logs (M5 review, checked 2026-11-25)
+
+Sources: https://developers.cloudflare.com/workers/observability/logs/workers-logs/ and https://developers.cloudflare.com/workers/wrangler/configuration/#observability (Context7 library `/cloudflare/cloudflare-docs`), and the `Observability` definition in Wrangler 4.168.0's `config-schema.json`.
+
+- Workers Logs is on by default for new Workers (`observability.enabled` defaults to true) with `head_sampling_rate` 1. Its invocation logs write one entry per request whose message is the request method and URL; `logs.invocation_logs: false` turns them off. `redact_query_string` (default false) removes query strings from request URLs in logs and traces.
+- `backend/wrangler.jsonc` sets, for every environment: `observability.enabled: true`, `redact_query_string: true`, `logs.invocation_logs: false`, `logs.head_sampling_rate: 1`, `traces.enabled: false`. So Workers Logs keep only the Worker's own `console` lines (task failures by name and code), never a request URL.
+- Request URLs may still be recorded outside the Worker (Cloudflare's zone HTTP logs, any proxy on the way). That is harmless now: no route carries a secret in its URL. Share tokens travel only in request bodies (`POST /shares/open`, `POST /shares/accept`, `POST /reports`) and in the link's fragment (`/s#<token>`), which browsers never send; session tokens are in the `Authorization` header; ids in paths are random UUIDs that are only meaningful with that user's session.
+- Share-report references (`src/share.ts`): the 30-day limit is a check of the sealed timestamp, not cryptography. Whoever holds `SERVER_KEY` (or `SERVER_KEY_PREVIOUS` while it is set) can decrypt a reference of any age until that key is rotated out.

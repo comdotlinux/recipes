@@ -61,6 +61,11 @@ import com.linux.recipes.ui.components.NoteBanner
 import com.linux.recipes.ui.components.PageGutter
 import com.linux.recipes.ui.components.RecipeIcons
 import com.linux.recipes.ui.components.SectionTitle
+import com.linux.recipes.ui.share.ShareActions
+import com.linux.recipes.ui.translate.LanguageAction
+import com.linux.recipes.ui.translate.TranslateViewModel
+import com.linux.recipes.ui.translate.TranslationHeader
+import com.linux.recipes.ui.translate.TranslationOverlays
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.stringResource
 import recipes.shared.generated.resources.Res
@@ -109,9 +114,10 @@ class RecipeDetailViewModel(private val repository: RecipeRepository, val id: St
 internal fun List<Ingredient>.grouped(): List<Pair<String?, List<Ingredient>>> =
     groupBy { it.group?.trim()?.ifEmpty { null } }.toList()
 
+/** [translate] null hides the language action (no AI repositories, as in tests of the plain screen). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RecipeDetailScreen(vm: RecipeDetailViewModel, onBack: () -> Unit, onEdit: () -> Unit) {
+fun RecipeDetailScreen(vm: RecipeDetailViewModel, onBack: () -> Unit, onEdit: () -> Unit, translate: TranslateViewModel? = null) {
     val recipes by vm.recipes.collectAsState()
     val recipe = recipes.firstOrNull { it.id == vm.id }
     var confirmDelete by rememberSaveable { mutableStateOf(false) }
@@ -132,6 +138,8 @@ fun RecipeDetailScreen(vm: RecipeDetailViewModel, onBack: () -> Unit, onEdit: ()
                 },
                 actions = {
                     if (recipe != null) {
+                        ShareActions(recipe)
+                        translate?.let { LanguageAction(it) }
                         IconButton(onClick = onEdit) { Icon(RecipeIcons.Edit, stringResource(Res.string.detail_edit)) }
                         IconButton(onClick = { confirmDelete = true }, enabled = !vm.deleting) {
                             Icon(RecipeIcons.Delete, stringResource(Res.string.detail_delete))
@@ -143,13 +151,16 @@ fun RecipeDetailScreen(vm: RecipeDetailViewModel, onBack: () -> Unit, onEdit: ()
         },
     ) { padding ->
         when {
-            recipe != null -> RecipeBody(recipe, vm::imagePath, onEdit, Modifier.padding(padding))
+            recipe != null -> RecipeBody(translate?.shown(recipe) ?: recipe, vm::imagePath, onEdit, Modifier.padding(padding)) {
+                translate?.let { TranslationHeader(it, recipe) }
+            }
             !gone -> Box(Modifier.fillMaxSize().padding(padding).padding(PageGutter)) {
                 NoteBanner(RecipeIcons.CloudOff, stringResource(Res.string.detail_missing))
             }
         }
     }
 
+    if (translate != null && recipe != null) TranslationOverlays(translate, recipe)
     if (confirmDelete && recipe != null) {
         ConfirmDialog(
             title = stringResource(Res.string.detail_delete_title),
@@ -174,7 +185,13 @@ fun RecipeDetailScreen(vm: RecipeDetailViewModel, onBack: () -> Unit, onEdit: ()
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun RecipeBody(recipe: Recipe, imagePath: (String) -> String?, onEdit: () -> Unit, modifier: Modifier) {
+private fun RecipeBody(
+    recipe: Recipe,
+    imagePath: (String) -> String?,
+    onEdit: () -> Unit,
+    modifier: Modifier,
+    afterTitle: @Composable () -> Unit = {},
+) {
     LazyColumn(
         modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = PageGutter, end = PageGutter, bottom = 48.dp),
@@ -191,6 +208,7 @@ private fun RecipeBody(recipe: Recipe, imagePath: (String) -> String?, onEdit: (
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                afterTitle()
             }
         }
         val facts = listOfNotNull(

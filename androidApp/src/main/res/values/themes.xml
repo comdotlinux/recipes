@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The launch window before Compose draws: a neutral paper close to every palette's light background
+         (Herb FCFAF5, Tomato and Charcoal FAFAF9, Ocean F9FAFA). values-night holds the dark counterpart. -->
+    <style name="Theme.Recipes" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/launch_background</item>
+    </style>
+    <color name="launch_background">#FAFAF7</color>
+</resources>

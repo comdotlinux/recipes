@@ -61,6 +61,7 @@ enum class ErrorCode(val wire: String) {
     AttemptLimit("attempt_limit"),
     InvalidUrl("invalid_url"),
     TextTooLarge("text_too_large"),
+    SubscriptionRequired("subscription_required"),
     Unknown("unknown"),
     ;
 
@@ -135,9 +136,20 @@ data class ImportRequest(
     @EncodeDefault(EncodeDefault.Mode.NEVER) val text: String? = null,
 )
 
-/** `status`: pending, running, done, guard_block, no_recipe, invalid or failed. [draft] only when done. */
+/**
+ * `status`: pending, running, done, guard_block, no_recipe, invalid or failed. [draft] only when an import is done.
+ * A translation job (kind `translation`, M4) also names its [recipeId] and target [language].
+ */
 @Serializable
-data class ImportJob(val id: String, val kind: String, val status: String, val createdAt: String, val draft: RecipeInput? = null)
+data class ImportJob(
+    val id: String,
+    val kind: String,
+    val status: String,
+    val createdAt: String,
+    val draft: RecipeInput? = null,
+    val recipeId: String? = null,
+    val language: String? = null,
+)
 
 /** `POST /reports`; [reason] is wrong_content, offensive or other. */
 @Serializable data class Report(val kind: String, val jobId: String, val reason: String, val note: String)
@@ -220,6 +232,15 @@ class Api(
         }
     }
 
+    /** M4: [jobId] is the Idempotency-Key, as for imports. */
+    suspend fun startTranslation(recipeId: String, jobId: String, language: String): ApiResult<ImportJob> = call {
+        post(url("/recipes/$recipeId/translations")) {
+            auth()
+            header(IDEMPOTENCY_KEY, jobId)
+            json(TranslationRequest(language))
+        }
+    }
+
     suspend fun job(jobId: String): ApiResult<ImportJob> = call { get(url("/jobs/$jobId")) { auth() } }
 
     suspend fun report(report: Report): ApiResult<Unit> = call {
@@ -230,6 +251,36 @@ class Api(
     }
 
     suspend fun refreshEntitlement(): ApiResult<EntitlementRefresh> = call { post(url("/entitlement/refresh")) { auth() } }
+
+    // M5: sharing and PDF. The share token goes only in request bodies, never in a path or query.
+    suspend fun createShare(recipeId: String): ApiResult<ShareCreated> = call { post(url("/recipes/$recipeId/shares")) { auth() } }
+
+    suspend fun shares(): ApiResult<ShareList> = call { get(url("/shares")) { auth() } }
+
+    suspend fun deleteShare(shareId: String): ApiResult<Unit> = call { delete(url("/shares/$shareId")) { auth() } }
+
+    suspend fun openShare(token: String): ApiResult<SharePreview> = call {
+        post(url("/shares/open")) {
+            auth()
+            json(ShareTokenBody(token))
+        }
+    }
+
+    suspend fun acceptShare(token: String): ApiResult<Recipe> = call {
+        post(url("/shares/accept")) {
+            auth()
+            json(ShareTokenBody(token))
+        }
+    }
+
+    suspend fun reportShare(report: ShareReport): ApiResult<Unit> = call {
+        post(url("/reports")) {
+            auth()
+            json(report)
+        }
+    }
+
+    suspend fun pdf(recipeId: String): ApiResult<ByteArray> = call { get(url("/recipes/$recipeId/pdf")) { auth() } }
 
     private fun url(path: String) = "$baseUrl/v1$path"
 
