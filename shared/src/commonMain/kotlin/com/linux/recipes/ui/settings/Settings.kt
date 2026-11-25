@@ -43,6 +43,21 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.linux.recipes.data.ConsentRepository
 import com.linux.recipes.data.ConsentState
+import com.linux.recipes.data.BillingRepository
+import com.linux.recipes.data.ImportRepository
+import com.linux.recipes.data.Quota
+import com.linux.recipes.ui.paywall.PaywallSheet
+import com.linux.recipes.ui.paywall.messageOf
+import org.jetbrains.compose.resources.StringResource
+import androidx.compose.runtime.LaunchedEffect
+import recipes.shared.generated.resources.pro_loading
+import recipes.shared.generated.resources.pro_restore
+import recipes.shared.generated.resources.pro_title
+import recipes.shared.generated.resources.pro_working
+import recipes.shared.generated.resources.settings_pro_active
+import recipes.shared.generated.resources.settings_pro_free
+import recipes.shared.generated.resources.settings_pro_manage
+import recipes.shared.generated.resources.settings_pro_upgrade
 import com.linux.recipes.data.SessionRepository
 import com.linux.recipes.data.SessionState
 import com.linux.recipes.ui.components.ConfirmDialog
@@ -79,9 +94,40 @@ import recipes.shared.generated.resources.settings_title
 
 const val LEGAL_BASE = "https://recipe.munich-tech.de"
 
-/** [consent] null hides the "AI imports" section. */
-class SettingsViewModel(private val session: SessionRepository, private val consent: ConsentRepository? = null) : ViewModel() {
+/** [consent] null hides the "AI imports" section; [imports] or [billing] null hides "Recipes Pro". */
+class SettingsViewModel(
+    private val session: SessionRepository,
+    private val consent: ConsentRepository? = null,
+    private val imports: ImportRepository? = null,
+    val billing: BillingRepository? = null,
+) : ViewModel() {
     val state = session.state
+    val proShown = imports != null && billing != null
+
+    /** From `GET /me`; null while loading or offline. */
+    var quota by mutableStateOf<Quota?>(null)
+        private set
+    var restoring by mutableStateOf(false)
+        private set
+    var restoreMessage by mutableStateOf<StringResource?>(null)
+        private set
+
+    fun loadQuota() {
+        val repository = imports ?: return
+        viewModelScope.launch { quota = repository.quota() }
+    }
+
+    fun restore() {
+        val repository = billing ?: return
+        restoring = true
+        restoreMessage = null
+        viewModelScope.launch {
+            restoreMessage = messageOf(repository.restore(), restore = true)
+            restoring = false
+            loadQuota()
+        }
+    }
+
     val consentState = consent?.state
     val consentVersion = consent?.currentVersion
     var withdrawFailed by mutableStateOf(false)
@@ -121,6 +167,7 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
     val copied = stringResource(Res.string.settings_support_id_copied)
     var confirmSignOut by rememberSaveable { mutableStateOf(false) }
     var confirmWithdraw by rememberSaveable { mutableStateOf(false) }
+    var showPaywall by rememberSaveable { mutableStateOf(false) }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -181,6 +228,18 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
                     modifier = Modifier.padding(start = 8.dp),
                 )
             }
+            if (vm.proShown) {
+                LaunchedEffect(vm) { vm.loadQuota() }
+                ProSection(
+                    quota = vm.quota,
+                    restoring = vm.restoring,
+                    restoreMessage = vm.restoreMessage,
+                    onOpen = {
+                        if (vm.quota?.entitled == true) vm.billing?.manageUrl()?.let(uriHandler::openUri) else showPaywall = true
+                    },
+                    onRestore = vm::restore,
+                )
+            }
             vm.consentState?.let { consentFlow ->
                 val consent by consentFlow.collectAsState()
                 AiImportsSection(
@@ -218,6 +277,16 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
         }
     }
 
+    if (showPaywall) {
+        PaywallSheet(
+            onClose = { showPaywall = false },
+            onSubscribed = {
+                showPaywall = false
+                vm.loadQuota()
+            },
+            billing = vm.billing,
+        )
+    }
     if (confirmWithdraw) {
         ConfirmDialog(
             title = stringResource(Res.string.settings_ai_withdraw_title),
@@ -245,6 +314,49 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
             },
             onDismiss = { confirmSignOut = false },
         )
+    }
+}
+
+/** Free, or Pro until the date the server reports; the row opens the paywall or the store's subscription page. */
+@Composable
+private fun ProSection(quota: Quota?, restoring: Boolean, restoreMessage: StringResource?, onOpen: () -> Unit, onRestore: () -> Unit) {
+    val entitled = quota?.entitled == true
+    SectionTitle(stringResource(Res.string.pro_title), Modifier.padding(top = 16.dp))
+    Column(Modifier.fillMaxWidth().clip(MaterialTheme.shapes.large).background(MaterialTheme.colorScheme.surfaceContainerLow)) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable(enabled = quota != null, role = Role.Button, onClick = onOpen)
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    when {
+                        quota == null -> stringResource(Res.string.pro_loading)
+                        // The date part of the ISO 8601 end; readable in every locale.
+                        entitled -> stringResource(Res.string.settings_pro_active, quota.entitledUntil.orEmpty().take(10))
+                        else -> stringResource(Res.string.settings_pro_free)
+                    },
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                if (quota != null) {
+                    Text(
+                        stringResource(if (entitled) Res.string.settings_pro_manage else Res.string.settings_pro_upgrade),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (entitled) Icon(RecipeIcons.External, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        }
+        HorizontalDivider(Modifier.padding(horizontal = 20.dp), color = MaterialTheme.colorScheme.outlineVariant)
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (restoreMessage != null) {
+                Text(stringResource(restoreMessage), style = MaterialTheme.typography.bodyMedium)
+            }
+            OutlinedButton(onClick = onRestore, enabled = !restoring, modifier = Modifier.heightIn(min = 48.dp), shape = MaterialTheme.shapes.medium) {
+                Text(stringResource(if (restoring) Res.string.pro_working else Res.string.pro_restore))
+            }
+        }
     }
 }
 

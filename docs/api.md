@@ -415,3 +415,50 @@ Rules:
 - Signing out, and any 401, ends the open job locally and clears `activeJob`.
 - Whenever the repositories read `GET /me` and it names an `openJobId` while no job is active locally (started on another device, or before a reinstall), that job becomes `activeJob`. After a 409 `job_running`, `GET /me` is read once for this.
 - Not in M2: receiving a link shared from another app (Android share intent, iOS share extension).
+
+### Client, milestone M3: `data/BillingRepositories.kt` and `platform/BillingProvider.kt`
+
+```kotlin
+enum class PlanPeriod { Month, Year }
+
+/** A store product of Recipes Pro. [price] is formatted by the store, for example "0,49 €". */
+data class Plan(val id: String, val period: PlanPeriod, val price: String)
+
+sealed interface PurchaseResult {
+    data object Success : PurchaseResult           // the store accepted it AND POST /entitlement/refresh shows entitlement.active
+    data object Cancelled : PurchaseResult
+    data object Pending : PurchaseResult           // payment not confirmed, or confirmed by the store but not yet by our server
+    data object StoreUnavailable : PurchaseResult
+    data object Failed : PurchaseResult
+}
+
+interface BillingRepository {
+    /** The plans of the current offering; empty when the store is unavailable. */
+    suspend fun plans(): List<Plan>
+    suspend fun purchase(planId: String): PurchaseResult
+    suspend fun restore(): PurchaseResult
+    /** The store's page to manage or cancel the subscription, or null when there is none. */
+    fun manageUrl(): String?
+}
+
+/** The thin seam over the store SDK; `Success` here means only that the store accepted it. Never throws. */
+interface BillingProvider {
+    /** True when the SDK now runs as [userId]; idempotent. */
+    suspend fun logIn(userId: String): Boolean
+    suspend fun logOut()
+    suspend fun plans(): List<Plan>
+    suspend fun purchase(planId: String): PurchaseResult
+    suspend fun restore(): PurchaseResult
+    fun manageUrl(): String?
+}
+```
+
+`Quota` (milestone M2) gains `entitledUntil: String? = null`, the `entitlement.expiresAt` of `GET /me`.
+
+Rules:
+- Products: `monthly` and `yearly`, both granting the entitlement `recipes_pro`. The current offering's monthly and annual packages map to the plan ids `monthly` and `yearly`. Prices shown always come from the store through the SDK.
+- `RevenueCatBillingProvider` (common code, RevenueCat's Kotlin Multiplatform SDK) is configured with the platform's public SDK key from `gradle.properties` (`REVENUECAT_ANDROID_KEY`, `REVENUECAT_IOS_KEY`, through `AppConfig`). An empty key reports the store unavailable and never configures the SDK. A key starting with `sk_` (a secret key) fails the build.
+- `DefaultBillingRepository` follows the session: `logIn(userId)` whenever it is signed in (after sign-in, and at app start with a restored session), `logOut()` whenever it is signed out (sign-out, and any 401). `plans`, `purchase` and `restore` log in first; while signed out they return an empty list and `Failed` without calling the store; when the store cannot log in, `StoreUnavailable`.
+- After the store accepts a purchase or a restore, the repository calls `POST /entitlement/refresh`: `entitlement.active` true is `Success`, false, offline, 429 and 503 are `Pending` (the next `quota()` settles it), 401 is `Failed` and ends the session. Whatever the store refuses is returned without a refresh. A restore that finds no active `recipes_pro` is `Failed`.
+- The paywall opens on `ImportStart.QuotaExhausted` and from "Recipes Pro" in Settings. After `Success` it closes and the import that hit the limit starts again with a new Idempotency-Key.
+- Debug builds of the Android app use a provider in `androidApp/src/debug` with fixed, labelled test prices; a purchase calls the local Worker's `POST /v1/testing/entitlement` (see "Local environment only"). `:androidApp:verifyReleaseIsolation` fails if it reaches a release APK.

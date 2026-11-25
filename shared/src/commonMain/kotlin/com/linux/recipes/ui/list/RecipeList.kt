@@ -159,6 +159,7 @@ fun RecipeListScreen(
                     onAdd()
                 },
                 onClose = imports::closePaywall,
+                onSubscribed = imports::subscribed,
             )
         }
     }

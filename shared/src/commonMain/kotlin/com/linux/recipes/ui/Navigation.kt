@@ -28,6 +28,7 @@ import com.linux.recipes.ui.imports.ReviewImportScreen
 import com.linux.recipes.ui.imports.ReviewLocalScreen
 import com.linux.recipes.ui.list.RecipeListScreen
 import com.linux.recipes.ui.list.RecipeListViewModel
+import com.linux.recipes.ui.paywall.LocalBilling
 import com.linux.recipes.ui.settings.SettingsScreen
 import com.linux.recipes.ui.settings.SettingsViewModel
 import com.linux.recipes.ui.signin.SignInScreen
@@ -163,7 +164,8 @@ fun RecipesNavHost(
             )
         }
         composable<SettingsRoute> {
-            SettingsScreen(viewModel { SettingsViewModel(sessionRepository, consent) }, onBack = { nav.popBackStack() })
+            val billing = LocalBilling.current
+            SettingsScreen(viewModel { SettingsViewModel(sessionRepository, consent, imports, billing) }, onBack = { nav.popBackStack() })
         }
     }
 }

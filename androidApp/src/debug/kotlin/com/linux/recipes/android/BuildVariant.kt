@@ -3,6 +3,7 @@ package com.linux.recipes.android
 import android.app.Activity
 import com.linux.recipes.platform.AuthProvider
 import com.linux.recipes.platform.AuthResult
+import com.linux.recipes.platform.BillingProvider
 
 /**
  * Debug builds only (source set `debug`): talk to the local Worker (`wrangler dev --env local`) and sign in
@@ -14,6 +15,9 @@ object BuildVariant {
 
     @Suppress("UNUSED_PARAMETER")
     fun authProvider(activity: () -> Activity?): AuthProvider = TestAuthProvider()
+
+    /** The emulator has no store: purchases switch the local Worker's subscription instead. */
+    fun billingProvider(sessionToken: () -> String?): BillingProvider = DebugBillingProvider(baseUrl, sessionToken)
 }
 
 /**

@@ -4,6 +4,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.window.ComposeUIViewController
 import com.linux.recipes.platform.AppleAuthProvider
 import com.linux.recipes.platform.KeychainSecureStore
+import com.linux.recipes.platform.RevenueCatBillingProvider
 import platform.Foundation.NSApplicationSupportDirectory
 import platform.Foundation.NSBundle
 import platform.Foundation.NSFileManager
@@ -20,6 +21,7 @@ private val graph: AppGraph by lazy {
         filesDir = requireNotNull(supportDir.path),
         secureStore = KeychainSecureStore(service = NSBundle.mainBundle.bundleIdentifier ?: "com.linux.recipes"),
         authProvider = AppleAuthProvider(),
+        billingProvider = { RevenueCatBillingProvider(AppConfig.REVENUECAT_IOS_KEY, "https://apps.apple.com/account/subscriptions") },
     )
 }
 

@@ -103,7 +103,7 @@ class DefaultImportRepository(
     }
 
     override suspend fun quota(): Quota? = consent.loadMe()?.let {
-        Quota(it.quota.freeImportUsed, it.quota.monthUsed, it.quota.monthLimit, entitled = it.entitlement.active)
+        Quota(it.quota.freeImportUsed, it.quota.monthUsed, it.quota.monthLimit, it.entitlement.active, it.entitlement.expiresAt)
     }
 
     override suspend fun report(jobId: String, reason: ReportReason, note: String): Boolean {
