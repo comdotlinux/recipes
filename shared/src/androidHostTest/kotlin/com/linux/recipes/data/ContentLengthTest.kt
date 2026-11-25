@@ -41,17 +41,25 @@ class ContentLengthTest {
     fun stop() = server.stop(0)
 
     @Test
-    fun jsonAndImageBodiesCarryContentLength() = runBlocking {
+    fun jsonImageAndPhotoImportBodiesCarryContentLength() = runBlocking {
         val api = Api(Api.httpClient(HttpClient(Android)), "http://127.0.0.1:${server.address.port}") { "v1.u.s.t" }
         api.createSession(SessionRequest("test", "id", "n", "ts", true))
         api.putRecipe(RecipeInput(id = ID_A, title = "Kartoffelsalat", language = "de"), expectedRev = null)
         api.putImage(ID_A, IMG_1, ByteArray(70_000) { it.toByte() })
+        api.putConsent(1)
+        api.startImport(ID_B, ImportRequest(kind = "text", text = "Kartoffelsalat\n1 kg Kartoffeln"))
+        api.startPhotoImport(ID_B, ByteArray(90_000) { it.toByte() })
+        api.report(Report("import_result", ID_B, "other", ""))
 
-        assertEquals(listOf("/v1/session", "/v1/recipes/$ID_A", "/v1/recipes/$ID_A/images/$IMG_1"), seen.map { it.path })
+        assertEquals(
+            listOf("/v1/session", "/v1/recipes/$ID_A", "/v1/recipes/$ID_A/images/$IMG_1", "/v1/me/consent", "/v1/imports", "/v1/imports", "/v1/reports"),
+            seen.map { it.path },
+        )
         seen.forEach {
             assertEquals("${it.path} Content-Length", it.bodySize.toString(), it.contentLength)
             assertNull("${it.path} must not be chunked", it.transferEncoding)
         }
-        assertEquals(70_000, seen.last().bodySize)
+        assertEquals(70_000, seen[2].bodySize)
+        assertEquals(90_000, seen[5].bodySize)
     }
 }
