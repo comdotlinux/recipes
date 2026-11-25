@@ -26,6 +26,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.window.Dialog
 import com.linux.recipes.platform.TurnstileGate
+import com.linux.recipes.platform.LocalTurnstileView
 import com.linux.recipes.platform.TurnstileView
 import recipes.shared.generated.resources.action_cancel
 import recipes.shared.generated.resources.signin_check_body
@@ -117,12 +118,13 @@ private fun TurnstileDialog(challenge: TurnstileChallenge) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                TurnstileView(
-                    baseUrl = challenge.baseUrl,
-                    onToken = { challenge.gate.deliver(it) },
+                val turnstileView = LocalTurnstileView.current ?: { url, onToken, modifier, onError -> TurnstileView(url, onToken, modifier, onError) }
+                turnstileView(
+                    challenge.baseUrl,
+                    { challenge.gate.deliver(it) },
+                    Modifier.fillMaxWidth().heightIn(min = 80.dp),
                     // The page itself could not load: sign-in ends as Failed(Rejected), not a blank dialog.
-                    onError = { challenge.gate.fail() },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp),
+                    { challenge.gate.fail() },
                 )
                 TextButton(
                     onClick = { challenge.gate.deliver(null) },

@@ -76,8 +76,8 @@ private class TurnstileMessageHandler(private val baseUrl: String, private val o
     override fun userContentController(userContentController: WKUserContentController, didReceiveScriptMessage: WKScriptMessage) {
         val frame = didReceiveScriptMessage.frameInfo
         val origin = frame.securityOrigin
-        if (!TurnstilePolicy.isTrustedMessageOrigin(frame.isMainFrame(), origin.protocol, origin.host, origin.port.toInt(), baseUrl)) return
-        (didReceiveScriptMessage.body as? String)?.takeIf { it.isNotBlank() }?.let(onToken)
+        TurnstilePolicy.messageToken(frame.isMainFrame(), origin.protocol, origin.host, origin.port.toInt(), baseUrl, didReceiveScriptMessage.body)
+            ?.let(onToken)
     }
 }
 
