@@ -8,6 +8,12 @@ import androidx.compose.material3.Shapes
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import org.jetbrains.compose.resources.StringResource
+import recipes.shared.generated.resources.Res
+import recipes.shared.generated.resources.palette_charcoal
+import recipes.shared.generated.resources.palette_herb
+import recipes.shared.generated.resources.palette_ocean
+import recipes.shared.generated.resources.palette_tomato
 
 // Owner rules: flat colours only, no hue between 250 and 320 degrees, text on background at least 4.5:1.
 // The full ColorScheme constructor is used on purpose: it has no defaults, so the purple Material
@@ -116,15 +122,28 @@ val DarkColors = ColorScheme(
 )
 
 /**
- * One accent palette: a light and a dark scheme. M4 adds three more palettes as further values of
- * this class; [Palettes.all] is what the theme picker and ThemeRulesTest iterate over.
+ * One accent palette: a light and a dark scheme and the [name] the theme picker shows. [Palettes.all] is what the
+ * theme picker and ThemeRulesTest iterate over; [id] is what the device preference stores.
  */
-data class Palette(val id: String, val light: ColorScheme, val dark: ColorScheme)
+data class Palette(val id: String, val name: StringResource, val light: ColorScheme, val dark: ColorScheme)
 
 object Palettes {
     /** Basil green on warm paper, with a terracotta tertiary for small accents. */
-    val Herb = Palette(id = "herb", light = LightColors, dark = DarkColors)
-    val all: List<Palette> = listOf(Herb)
+    val Herb = Palette(id = "herb", name = Res.string.palette_herb, light = LightColors, dark = DarkColors)
+
+    /** Tomato red on warm paper, with an olive tertiary. */
+    val Tomato = Palette(id = "tomato", name = Res.string.palette_tomato, light = TomatoLight, dark = TomatoDark)
+
+    /** Deep blue-green on cool paper, with a coral tertiary. */
+    val Ocean = Palette(id = "ocean", name = Res.string.palette_ocean, light = OceanLight, dark = OceanDark)
+
+    /** Neutral charcoal greys, with an amber tertiary. */
+    val Charcoal = Palette(id = "charcoal", name = Res.string.palette_charcoal, light = CharcoalLight, dark = CharcoalDark)
+
+    val all: List<Palette> = listOf(Herb, Tomato, Ocean, Charcoal)
+
+    /** An unknown id (a palette removed in a later version) falls back to [Herb]. */
+    fun byId(id: String?): Palette = all.firstOrNull { it.id == id } ?: Herb
 }
 
 /** Softer, larger radii than Material's 4/8/12/16/28 so cards and fields read as calm paper shapes. */
