@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.v2.runComposeUiTest
 import com.linux.recipes.UiTest
@@ -299,7 +300,7 @@ class ImportUiTest : UiTest() {
         importLink()
         waitForText("You have used your free import.")
         onNodeWithText("More AI imports come with Recipes Pro. Typing recipes in stays free and unlimited.").assertIsDisplayed()
-        click("Type it in instead")
+        onNodeWithText("Type it in instead").performScrollTo().performClick()
         waitForText("Basics")
         assertTrue(onAllNodesWithText("You have used your free import.").fetchSemanticsNodes().isEmpty())
     }
@@ -309,7 +310,7 @@ class ImportUiTest : UiTest() {
         app(FakeImportRepository().apply { startResult = ImportStart.QuotaExhausted })
         importLink()
         waitForText("You have used your free import.")
-        clickDialogConfirm("Close")
+        onAllNodesWithText("Close").onLast().performScrollTo().performClick()
         waitForNoText("You have used your free import.")
         onNodeWithText("New recipe").assertIsDisplayed()
     }
