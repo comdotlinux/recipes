@@ -77,6 +77,8 @@ class FakeConsentRepository(given: Boolean = true) : ConsentRepository {
         return online
     }
 
+    override suspend fun refresh(): Boolean = online
+
     override suspend fun withdraw(): Boolean {
         if (online) state.value = ConsentState.NotGiven
         return online
