@@ -188,6 +188,8 @@ export class UserDO extends DurableObject<Env> {
 					suspension: state === "suspended" ? { reason: this.meta("suspension_reason") } : null,
 					...billing,
 					consentVersion: consent === null ? null : Number(consent),
+					// At most one open job (startImport's job_running check), so a 409 can always be resolved to it.
+					openJobId: this.sql.exec<{ job_key: string }>("SELECT job_key FROM jobs WHERE status IN ('pending', 'running') LIMIT 1").toArray()[0]?.job_key ?? null,
 				},
 			};
 		});

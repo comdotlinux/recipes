@@ -54,7 +54,8 @@ The `POST /v1/webhooks/revenuecat` route (Milestone M3) is called by RevenueCat,
   "entitlement": { "active": false, "expiresAt": null },
   "quota": { "freeImportUsed": false, "monthUsed": 0, "monthLimit": 30 },
   "storage": { "usedBytes": 0, "capBytes": 52428800 },
-  "consentVersion": null          // or an integer
+  "consentVersion": null,         // or an integer
+  "openJobId": null               // the id of the user's open import job (status pending or running), or null
 }
 ```
 
@@ -159,6 +160,7 @@ The page calls whichever of the two exists. It loads script and frames only from
 }
 ```
 
+- `GET /me` shows the open job's id in `openJobId` (null when none is open), so the app can resume a running import after a reinstall or on another device, and resolve a 409 `job_running` to its job.
 - The client polls every 2 seconds until the status is no longer `pending` or `running`. Every job ends in exactly one of the five outcomes; a job still open after 10 minutes ends as `failed`.
 - The draft is a `RecipeInput` with a new server-generated `id`, `sourceType` `"url"` (with `sourceUrl`) or `"photo"` (for `text` and `photo`), and `imageIds: []`. Nothing is saved: the app opens the draft in the edit form, and the user saves it with the normal `PUT /recipes/:id` and `If-None-Match: *`.
 - Outcomes and the unit: `done` keeps the charge. `guard_block` (blocked by the safety filter), `no_recipe` (the input is not a recipe) and `invalid` (the result failed validation) refund the unit and count one attempt. `failed` (model or network error after 3 tries, or the 10-minute timeout) refunds without counting an attempt.

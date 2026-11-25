@@ -353,6 +353,19 @@ describe("outcomes and the unit (AC17)", () => {
 });
 
 describe("jobs and reports", () => {
+	it("GET /me openJobId: null without a job, the id while it is open, null after it ends, never another user's job", async () => {
+		const openJob = async (s: Session) => ((await (await call("/me", { token: s.token })).json()) as { openJobId: string | null }).openJobId;
+		const [s, other] = [await ready(), await ready()];
+		expect(await openJob(s)).toBeNull();
+		fakeAi(() => new Promise(() => {})); // never answers: the job stays open
+		const key = uuid();
+		expect((await startText(s, key)).status).toBe(202);
+		expect(await openJob(s)).toBe(key);
+		expect(await openJob(other)).toBeNull();
+		await inObject(s.userId, (instance) => instance.timeoutJob(key, Date.now()));
+		expect(await openJob(s)).toBeNull();
+	});
+
 	it("404 for another user's job, an unknown job and a job older than 7 days", async () => {
 		const a = await ready();
 		const b = await ready();
