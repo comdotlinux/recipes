@@ -41,6 +41,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.linux.recipes.data.ConsentRepository
+import com.linux.recipes.data.ConsentState
 import com.linux.recipes.data.SessionRepository
 import com.linux.recipes.data.SessionState
 import com.linux.recipes.ui.components.ConfirmDialog
@@ -53,6 +55,14 @@ import recipes.shared.generated.resources.Res
 import recipes.shared.generated.resources.action_back
 import recipes.shared.generated.resources.action_cancel
 import recipes.shared.generated.resources.settings_account
+import recipes.shared.generated.resources.settings_ai
+import recipes.shared.generated.resources.settings_ai_given
+import recipes.shared.generated.resources.settings_ai_not_given
+import recipes.shared.generated.resources.settings_ai_withdraw
+import recipes.shared.generated.resources.settings_ai_withdraw_body
+import recipes.shared.generated.resources.settings_ai_withdraw_confirm
+import recipes.shared.generated.resources.settings_ai_withdraw_failed
+import recipes.shared.generated.resources.settings_ai_withdraw_title
 import recipes.shared.generated.resources.settings_copy_support_id
 import recipes.shared.generated.resources.settings_imprint
 import recipes.shared.generated.resources.settings_legal
@@ -69,8 +79,20 @@ import recipes.shared.generated.resources.settings_title
 
 const val LEGAL_BASE = "https://recipe.munich-tech.de"
 
-class SettingsViewModel(private val session: SessionRepository) : ViewModel() {
+/** [consent] null hides the "AI imports" section. */
+class SettingsViewModel(private val session: SessionRepository, private val consent: ConsentRepository? = null) : ViewModel() {
     val state = session.state
+    val consentState = consent?.state
+    val consentVersion = consent?.currentVersion
+    var withdrawFailed by mutableStateOf(false)
+        private set
+
+    fun withdrawConsent() {
+        val repository = consent ?: return
+        withdrawFailed = false
+        viewModelScope.launch { withdrawFailed = !repository.withdraw() }
+    }
+
     var signingOut by mutableStateOf(false)
         private set
 
@@ -98,6 +120,7 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
     val uriHandler = LocalUriHandler.current
     val copied = stringResource(Res.string.settings_support_id_copied)
     var confirmSignOut by rememberSaveable { mutableStateOf(false) }
+    var confirmWithdraw by rememberSaveable { mutableStateOf(false) }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -158,6 +181,14 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
                     modifier = Modifier.padding(start = 8.dp),
                 )
             }
+            vm.consentState?.let { consentFlow ->
+                val consent by consentFlow.collectAsState()
+                AiImportsSection(
+                    given = consent == ConsentState.Given(vm.consentVersion ?: 0),
+                    failed = vm.withdrawFailed,
+                    onWithdraw = { confirmWithdraw = true },
+                )
+            }
             SectionTitle(stringResource(Res.string.settings_legal), Modifier.padding(top = 16.dp))
             Column(Modifier.fillMaxWidth().clip(MaterialTheme.shapes.large).background(MaterialTheme.colorScheme.surfaceContainerLow)) {
                 val links = listOf(
@@ -187,6 +218,20 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
         }
     }
 
+    if (confirmWithdraw) {
+        ConfirmDialog(
+            title = stringResource(Res.string.settings_ai_withdraw_title),
+            body = stringResource(Res.string.settings_ai_withdraw_body),
+            confirm = stringResource(Res.string.settings_ai_withdraw_confirm),
+            dismiss = stringResource(Res.string.action_cancel),
+            destructive = true,
+            onConfirm = {
+                confirmWithdraw = false
+                vm.withdrawConsent()
+            },
+            onDismiss = { confirmWithdraw = false },
+        )
+    }
     if (confirmSignOut) {
         ConfirmDialog(
             title = stringResource(Res.string.settings_sign_out_title),
@@ -200,5 +245,32 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
             },
             onDismiss = { confirmSignOut = false },
         )
+    }
+}
+
+@Composable
+private fun AiImportsSection(given: Boolean, failed: Boolean, onWithdraw: () -> Unit) {
+    SectionTitle(stringResource(Res.string.settings_ai), Modifier.padding(top = 16.dp))
+    Column(
+        Modifier.fillMaxWidth().clip(MaterialTheme.shapes.large).background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            stringResource(if (given) Res.string.settings_ai_given else Res.string.settings_ai_not_given),
+            style = MaterialTheme.typography.bodyLarge,
+        )
+        if (failed) {
+            Text(
+                stringResource(Res.string.settings_ai_withdraw_failed),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        if (given) {
+            OutlinedButton(onClick = onWithdraw, modifier = Modifier.heightIn(min = 48.dp), shape = MaterialTheme.shapes.medium) {
+                Text(stringResource(Res.string.settings_ai_withdraw))
+            }
+        }
     }
 }

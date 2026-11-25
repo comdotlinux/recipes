@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import com.linux.recipes.data.Ingredient
 import com.linux.recipes.data.Recipe
 import com.linux.recipes.data.RecipeInput
+import com.linux.recipes.data.toInput
 
 /** Limits from docs/api.md, "Recipes". */
 object Limits {
@@ -101,7 +102,10 @@ class RecipeForm(val id: String, defaultLanguage: String) {
     val images = mutableStateListOf<FormImage>()
     private var baseline = snapshot()
 
-    fun load(recipe: Recipe) {
+    fun load(recipe: Recipe) = load(recipe.toInput())
+
+    /** Also used for an imported draft, which is a [RecipeInput] that has never been saved. */
+    fun load(recipe: RecipeInput) {
         title = recipe.title
         description = recipe.description
         servings = recipe.servings?.toString().orEmpty()
