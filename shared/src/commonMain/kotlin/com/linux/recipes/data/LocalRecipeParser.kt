@@ -19,7 +19,8 @@ import com.linux.recipes.ui.edit.Limits
  *   line is the item.
  * - A numbered or bulleted line, or one after a line ending in . ! ? or :, starts a new step; any other line
  *   continues the step above (a wrapped line), and a word broken with a hyphen is joined again.
- * - The language is "de" when German headings and units outnumber English ones, else "en".
+ * - The language is "de" when German signals outnumber English ones, else "en". Signals are headings, units,
+ *   very common words ("und", "mit", "der" against "and", "with", "the") and, for German, ä ö ü ß.
  * Nothing is invented: lines that fit nowhere become steps. Every limit of the form is kept by truncating.
  */
 
@@ -31,7 +32,9 @@ private val NUMBERED = Regex("""^(?:\d{1,2}[.)]|(?:schritt|step)\s*\d{1,2}\s*[:.
 private val UNIT_TOKEN = Regex("""^([A-Za-zÄÖÜäöüß]+\.?)(?=\s|$)""")
 private val UNITS = setOf(
     "g", "kg", "mg", "ml", "l", "cl", "dl", "el", "tl", "prise", "prisen", "msp", "pck", "päckchen",
+    "dose", "dosen", "bund", "zehe", "zehen", "stück", "pkg", "becher", "scheibe", "scheiben", "tasse", "tassen", "glas",
     "cup", "cups", "tbsp", "tsp", "oz", "lb", "lbs", "tablespoon", "tablespoons", "teaspoon", "teaspoons", "pinch",
+    "can", "cans", "clove", "cloves", "stick", "sticks", "slice", "slices", "bunch", "piece", "pieces", "package", "packages",
 )
 
 private val INGREDIENT_HEADINGS = listOf("zutaten", "ingredients")
@@ -55,12 +58,25 @@ private val DURATION = Regex(
 private val GERMAN_WORDS = setOf(
     "zutaten", "zubereitung", "anleitung", "geht's", "für", "el", "tl", "prise", "prisen", "msp", "pck", "päckchen",
     "personen", "portionen", "vorbereitung", "kochzeit", "backzeit", "garzeit", "std", "minuten",
+    "dose", "dosen", "bund", "zehe", "zehen", "stück", "becher", "scheibe", "scheiben", "tasse", "tassen", "glas",
+    "und", "mit", "der", "die", "das", "oder", "bis", "den", "dem", "ein", "eine", "in", "zum", "zur",
 )
 private val ENGLISH_WORDS = setOf(
     "ingredients", "method", "directions", "instructions", "preparation", "steps", "cup", "cups", "tbsp", "tsp", "oz",
     "lb", "lbs", "pinch", "tablespoon", "tablespoons", "teaspoon", "teaspoons", "serves", "servings", "makes", "prep",
-    "cook", "bake", "minutes", "hours",
+    "cook", "bake", "minutes", "hours", "can", "cans", "clove", "cloves", "stick", "sticks", "slice", "slices", "bunch",
+    "piece", "pieces", "package", "packages",
+    "and", "with", "the", "of", "to", "for", "or", "until", "a", "an", "in", "into",
 )
+
+/** "de" when German headings, units, common words, umlauts and ß outnumber the English signals, else "en". */
+internal fun recipeLanguage(text: String): String {
+    val lower = text.lowercase().replace('’', '\'')
+    val tokens = lower.split(Regex("""[^a-zäöüß']+"""))
+    val german = tokens.count { it in GERMAN_WORDS } + lower.count { it in "äöüß" }
+    val english = tokens.count { it in ENGLISH_WORDS }
+    return if (german > english) "de" else "en"
+}
 
 private enum class Mode { None, Ingredients, Method }
 
@@ -132,9 +148,6 @@ fun parseRecipeText(text: String, id: String): RecipeInput {
         }
     }
 
-    val tokens = text.lowercase().replace('’', '\'').split(Regex("""[^a-zäöüß']+"""))
-    val german = tokens.count { it in GERMAN_WORDS }
-    val english = tokens.count { it in ENGLISH_WORDS }
     return RecipeInput(
         id = id,
         title = title.take(Limits.TITLE),
@@ -144,7 +157,7 @@ fun parseRecipeText(text: String, id: String): RecipeInput {
         ingredients = ingredients.take(Limits.INGREDIENTS),
         steps = steps.take(Limits.STEPS).map { it.take(Limits.STEP) },
         sourceType = "photo",
-        language = if (german > english) "de" else "en",
+        language = recipeLanguage(text),
     )
 }
 

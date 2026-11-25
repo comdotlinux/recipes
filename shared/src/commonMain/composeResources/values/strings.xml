@@ -189,7 +189,7 @@
     <string name="import_local_note">This photo was read on your phone. Nothing was sent.</string>
     <string name="import_tidy_up">Tidy up with AI</string>
     <string name="import_tidy_up_title">Tidy up with AI?</string>
-    <string name="import_tidy_up_body">AI makes a new draft from the text your phone read. This draft and your changes to it are not kept.</string>
+    <string name="import_tidy_up_body">AI makes a new draft from the text your phone read. The text read from the photo is sent, not your changes. This draft is not kept.</string>
     <string name="import_tidy_up_confirm">Tidy up</string>
     <string name="import_unreadable_title">Your phone could not read this picture.</string>
     <string name="import_unreadable_body">AI can try to read it, for example handwriting. The photo is then sent to our server.</string>
