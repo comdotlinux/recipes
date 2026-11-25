@@ -14,6 +14,9 @@ export default defineConfig({
 				bindings: {
 					USER_ID_PEPPER: "test-pepper-not-a-secret",
 					SERVER_KEY: "test-server-key-not-a-secret",
+					// With a key the object uses the real RevenueCat client; tests intercept its fetch (test/api/helpers.ts).
+					REVENUECAT_API_KEY: "test-revenuecat-key-not-a-secret",
+					REVENUECAT_WEBHOOK_SECRET: "Bearer test-webhook-secret-not-a-secret",
 				},
 			},
 		}),

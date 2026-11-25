@@ -16,15 +16,17 @@
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/v1/*", "/turnstile.html"] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["UserDO"] }],
   "durable_objects": { "bindings": [{ "name": "USER_DO", "class_name": "UserDO" }] },
-  "secrets": { "required": ["USER_ID_PEPPER", "SERVER_KEY", "TURNSTILE_SECRET"] },
-  "vars": { "APPLE_AUDIENCES": "", "GOOGLE_AUDIENCES": "", "DO_JURISDICTION": "eu", "TURNSTILE_SITE_KEY": "" },
+  "secrets": { "required": ["USER_ID_PEPPER", "SERVER_KEY", "TURNSTILE_SECRET", "REVENUECAT_API_KEY", "REVENUECAT_WEBHOOK_SECRET"] },
+  "vars": { "APPLE_AUDIENCES": "", "GOOGLE_AUDIENCES": "", "DO_JURISDICTION": "eu", "TURNSTILE_SITE_KEY": "",
+    "REVENUECAT_API_BASE": "https://api.revenuecat.com/v1", "REVENUECAT_ENTITLEMENT": "recipes_pro" },
   "ai": { "binding": "AI" },
   // namespace_id values are account-scoped integers chosen by us, not secrets.
   "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "recipes_metrics_toplevel" }],
   "ratelimits": [
     { "name": "RL_IP", "namespace_id": "9001", "simple": { "limit": 20, "period": 60 } },
     { "name": "RL_USER", "namespace_id": "9002", "simple": { "limit": 120, "period": 60 } },
-    { "name": "RL_GLOBAL", "namespace_id": "9003", "simple": { "limit": 600, "period": 60 } }
+    { "name": "RL_GLOBAL", "namespace_id": "9003", "simple": { "limit": 600, "period": 60 } },
+    { "name": "RL_WEBHOOK", "namespace_id": "9004", "simple": { "limit": 120, "period": 60 } }
   ],
   "workers_dev": false,
   "preview_urls": false,
@@ -47,41 +49,49 @@
         "TURNSTILE_SECRET": "1x0000000000000000000000000000000AA",
         // Development values, not secrets: env.local is never deployed. Tests check they stay out of the other environments.
         "USER_ID_PEPPER": "dev-only-user-id-pepper",
-        "SERVER_KEY": "dev-only-server-key"
+        "SERVER_KEY": "dev-only-server-key",
+        // No RevenueCat key locally: the local entry then uses src/testing/local-billing.ts (README "Try the subscription locally").
+        "REVENUECAT_API_BASE": "https://api.revenuecat.com/v1",
+        "REVENUECAT_ENTITLEMENT": "recipes_pro"
       },
       "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "recipes_metrics_local" }],
       "ratelimits": [
         { "name": "RL_IP", "namespace_id": "8001", "simple": { "limit": 20, "period": 60 } },
         { "name": "RL_USER", "namespace_id": "8002", "simple": { "limit": 120, "period": 60 } },
-        { "name": "RL_GLOBAL", "namespace_id": "8003", "simple": { "limit": 600, "period": 60 } }
+        { "name": "RL_GLOBAL", "namespace_id": "8003", "simple": { "limit": 600, "period": 60 } },
+        { "name": "RL_WEBHOOK", "namespace_id": "8004", "simple": { "limit": 120, "period": 60 } }
       ]
     },
     "staging": {
       "workers_dev": true,
       "preview_urls": true,
       "durable_objects": { "bindings": [{ "name": "USER_DO", "class_name": "UserDO" }] },
-      "secrets": { "required": ["USER_ID_PEPPER", "SERVER_KEY", "TURNSTILE_SECRET"] },
-      "vars": { "APPLE_AUDIENCES": "", "GOOGLE_AUDIENCES": "", "DO_JURISDICTION": "eu", "TURNSTILE_SITE_KEY": "" },
+      "secrets": { "required": ["USER_ID_PEPPER", "SERVER_KEY", "TURNSTILE_SECRET", "REVENUECAT_API_KEY", "REVENUECAT_WEBHOOK_SECRET"] },
+      "vars": { "APPLE_AUDIENCES": "", "GOOGLE_AUDIENCES": "", "DO_JURISDICTION": "eu", "TURNSTILE_SITE_KEY": "",
+        "REVENUECAT_API_BASE": "https://api.revenuecat.com/v1", "REVENUECAT_ENTITLEMENT": "recipes_pro" },
       "ai": { "binding": "AI" },
       "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "recipes_metrics_staging" }],
       "ratelimits": [
         { "name": "RL_IP", "namespace_id": "2001", "simple": { "limit": 20, "period": 60 } },
         { "name": "RL_USER", "namespace_id": "2002", "simple": { "limit": 120, "period": 60 } },
-        { "name": "RL_GLOBAL", "namespace_id": "2003", "simple": { "limit": 600, "period": 60 } }
+        { "name": "RL_GLOBAL", "namespace_id": "2003", "simple": { "limit": 600, "period": 60 } },
+        { "name": "RL_WEBHOOK", "namespace_id": "2004", "simple": { "limit": 120, "period": 60 } }
       ]
     },
     "production": {
       "workers_dev": false,
       "preview_urls": false,
       "durable_objects": { "bindings": [{ "name": "USER_DO", "class_name": "UserDO" }] },
-      "secrets": { "required": ["USER_ID_PEPPER", "SERVER_KEY", "TURNSTILE_SECRET"] },
-      "vars": { "APPLE_AUDIENCES": "", "GOOGLE_AUDIENCES": "", "DO_JURISDICTION": "eu", "TURNSTILE_SITE_KEY": "" },
+      "secrets": { "required": ["USER_ID_PEPPER", "SERVER_KEY", "TURNSTILE_SECRET", "REVENUECAT_API_KEY", "REVENUECAT_WEBHOOK_SECRET"] },
+      "vars": { "APPLE_AUDIENCES": "", "GOOGLE_AUDIENCES": "", "DO_JURISDICTION": "eu", "TURNSTILE_SITE_KEY": "",
+        "REVENUECAT_API_BASE": "https://api.revenuecat.com/v1", "REVENUECAT_ENTITLEMENT": "recipes_pro" },
       "ai": { "binding": "AI" },
       "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "recipes_metrics" }],
       "ratelimits": [
         { "name": "RL_IP", "namespace_id": "1001", "simple": { "limit": 20, "period": 60 } },
         { "name": "RL_USER", "namespace_id": "1002", "simple": { "limit": 120, "period": 60 } },
-        { "name": "RL_GLOBAL", "namespace_id": "1003", "simple": { "limit": 600, "period": 60 } }
+        { "name": "RL_GLOBAL", "namespace_id": "1003", "simple": { "limit": 600, "period": 60 } },
+        { "name": "RL_WEBHOOK", "namespace_id": "1004", "simple": { "limit": 120, "period": 60 } }
       ]
     }
   }

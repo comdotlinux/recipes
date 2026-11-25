@@ -1,0 +1,17 @@
+{
+  "api_version": "1.0",
+  "event": {
+    "app_id": "app0000000",
+    "environment": "SANDBOX",
+    "event_timestamp_ms": 1764000000000,
+    "id": "00000000-0000-4000-8000-000000000007",
+    "store": "APP_STORE",
+    "transferred_from": [
+      "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+    ],
+    "transferred_to": [
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    ],
+    "type": "TRANSFER"
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "entitlement": { "active": true, "expiresAt": "2026-12-25T10:00:00Z" },
+  "quota": { "freeImportUsed": true, "monthUsed": 3, "monthLimit": 30 },
+  "storage": { "usedBytes": 1048576, "capBytes": 524288000 }
+}

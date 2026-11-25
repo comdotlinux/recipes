@@ -1,7 +1,10 @@
 # Copy to .dev.vars (git-ignored) for `bun run dev`. Values are never committed.
 # env.local already sets Cloudflare's public Turnstile test secret in wrangler.jsonc.
 # SERVER_KEY_PREVIOUS is optional: set it only during a SERVER_KEY rotation (the old key).
+# REVENUECAT_API_KEY: leave it out locally to use the local subscription switch (README); set it to test against RevenueCat.
 USER_ID_PEPPER=
 SERVER_KEY=
 TURNSTILE_SECRET=
 SERVER_KEY_PREVIOUS=
+REVENUECAT_API_KEY=
+REVENUECAT_WEBHOOK_SECRET=
