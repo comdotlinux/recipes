@@ -39,6 +39,12 @@ describe("mapping the subscriber record (plan 4.6)", () => {
 		expect(mapSubscriber(record({ refunded: "2026-11-25T11:30:00Z" }), "recipes_pro", NOW)?.active).toBe(false);
 	});
 
+	it("a sandbox purchase counts as a subscription in every environment (on purpose: docs/versions/backend.md, RevenueCat)", () => {
+		const sandbox = record();
+		(sandbox.subscriber.subscriptions.monthly as Record<string, unknown>).is_sandbox = true;
+		expect(mapSubscriber(sandbox, "recipes_pro", NOW)?.active).toBe(true);
+	});
+
 	it("no recipes_pro entitlement means none; a non-expiring one is active", () => {
 		expect(mapSubscriber(record({ entitlements: {} }), "recipes_pro", NOW)).toEqual(NONE);
 		expect(mapSubscriber(record({ expires: null }), "recipes_pro", NOW)?.active).toBe(true);

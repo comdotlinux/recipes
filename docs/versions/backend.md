@@ -64,4 +64,10 @@ Webhooks (https://www.revenuecat.com/docs/integrations/webhooks, https://www.rev
 - Authorisation: an "Authorization header value" set in the dashboard is sent unchanged in every request. HMAC signing with `X-RevenueCat-Webhook-Signature` is recommended as a stronger option; not used yet.
 - Any answer other than 200 is a failure; RevenueCat retries up to 5 times (about 2.5, 5, 10, 20, 40 minutes) and recommends answering fast and processing later; duplicates can occur.
 
+Decisions about the mapping (security review M3, 2026-11-25):
+- Restore behaviour: the RevenueCat dashboard must be set to "keep with original App User ID" (owner action), so one store subscription cannot feed several accounts' monthly quotas; if it is set to transfer anyway, a `TRANSFER` refreshes both accounts and the old one loses the entitlement at its refresh, so two accounts are never active at once after both refreshes ran.
+- `is_sandbox` is ignored on purpose: Apple's App Review and TestFlight testers buy in the store sandbox against the production build, so production must honour sandbox purchases or review fails. Residual, accepted: store testers (only people the owner adds as sandbox or TestFlight testers) get Pro without paying.
+- Non-subscription (lifetime) purchases are not mapped, because no such product exists; only the `recipes_pro` entitlement of the `monthly` subscription counts.
+- Freshness: an answer is stored only if no refresh that started later stored one first (`entitlement_at`); an active record is re-read at most once a day even without a webhook, so a refund whose webhook was lost ends access within a day.
+
 UNVERIFIED until the owner connects the RevenueCat project: real responses of the v1 endpoint for a sandbox purchase (field presence, how a refund shows in `expires_date` and `refunded_at`), the exact header RevenueCat sends, and the restore behaviour setting named in plan 4.6.

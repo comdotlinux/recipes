@@ -32,6 +32,8 @@ export const REPORT_DAYS = 90;
 export const OFFLINE_HONOUR_MS = DAY_MS;
 /** After a failed RevenueCat call, requests use the stored entitlement for this long instead of calling again. */
 export const REFRESH_RETRY_MS = 60_000;
+/** An active entitlement that has not run out is re-read from RevenueCat at most this often (missed revocation webhooks). */
+export const RECHECK_MS = DAY_MS;
 /** POST /entitlement/refresh at most once per this interval per user. */
 export const CLIENT_REFRESH_MS = 5_000;
 /** A webhook-triggered refresh is retried with backoff (storage/tasks.ts) at most this many times. */
@@ -533,29 +535,42 @@ export class UserDO extends DurableObject<Env> {
 		return this.env.REVENUECAT_API_KEY ? revenueCat(this.env) : null;
 	}
 
-	/** Reads the subscriber record and stores it. Null when RevenueCat is unreachable; the stored entitlement then stays. */
+	/**
+	 * Reads the subscriber record and stores it. Null when RevenueCat is unreachable; the stored entitlement then stays.
+	 * `now` is when this refresh started: an answer is stored only if no refresh that started later has stored one already,
+	 * so a slow older answer (active) cannot overwrite a newer one (refunded). The stored record is returned in that case.
+	 */
 	protected async refreshEntitlement(now: number, trigger: string): Promise<Entitlement | null> {
 		const source = this.entitlementSource();
 		// The object's name is the user id (api.ts userObject), which is also the RevenueCat app user id (Purchases.logIn).
 		const userId = this.ctx.id.name;
+		this.setMeta("entitlement_tried_at", String(now));
 		const fresh = source && userId ? await source(userId, now) : null;
-		if (fresh) {
-			this.setMeta("entitlement", JSON.stringify(fresh));
-			this.sql.exec("DELETE FROM meta WHERE key = 'entitlement_failed_at'");
-		} else {
-			this.setMeta("entitlement_failed_at", String(now));
-		}
 		this.event({ event: "entitlement_refresh", trigger, outcome: fresh ? (fresh.active ? "active" : "inactive") : "unavailable" });
+		if (!fresh) {
+			this.setMeta("entitlement_failed_at", String(now));
+			return null;
+		}
+		if (now < Number(this.meta("entitlement_at") ?? "0")) return this.storedEntitlement();
+		this.setMeta("entitlement", JSON.stringify(fresh));
+		this.setMeta("entitlement_at", String(now));
+		this.sql.exec("DELETE FROM meta WHERE key = 'entitlement_failed_at'");
 		return fresh;
 	}
 
-	/** Entitled now? A stored entitlement that has run out is refreshed first, so a renewal counts before its webhook arrives. */
+	/**
+	 * Entitled now? An active record is re-read from RevenueCat when it has run out (so a renewal counts before its
+	 * webhook) and otherwise at most once a day (so a refund whose webhook was lost still ends access within a day).
+	 */
 	private async entitledNow(now: number): Promise<boolean> {
 		const stored = this.storedEntitlement();
+		if (!stored.active) return false;
 		const end = endOf(stored);
-		if (!stored.active || end === null || now < end) return entitled(stored, now, true);
-		const recentFailure = now - Number(this.meta("entitlement_failed_at") ?? "0") < REFRESH_RETRY_MS;
-		const fresh = recentFailure ? null : await this.refreshEntitlement(now, "stale");
+		const runOut = end !== null && now >= end;
+		const due = runOut
+			? now - Number(this.meta("entitlement_failed_at") ?? "0") >= REFRESH_RETRY_MS
+			: now - Number(this.meta("entitlement_tried_at") ?? "0") >= RECHECK_MS;
+		const fresh = due ? await this.refreshEntitlement(now, runOut ? "stale" : "daily") : null;
 		return fresh ? entitled(fresh, now, true) : entitled(stored, now, false);
 	}
 

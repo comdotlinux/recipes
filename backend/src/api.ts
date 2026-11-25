@@ -96,7 +96,7 @@ const WEBHOOK_TYPES = new Set([
 	"TEMPORARY_ENTITLEMENT_GRANT",
 	"INVOICE_ISSUANCE",
 ]);
-const AppUserIds = z.array(z.string().max(512)).max(50).nullish();
+const AppUserIds = z.array(z.string().max(512)).max(5).nullish();
 /** Only the fields that name accounts; the rest of the payload is not trusted and not read (plan 4.6). */
 const WebhookBody = z.object({
 	event: z.object({ type: z.string().min(1).max(64), app_user_id: z.string().max(512).nullish(), transferred_from: AppUserIds, transferred_to: AppUserIds }),
@@ -383,6 +383,11 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 			systemEvent(c.env, { event: "auth_failure", reason: "webhook_unauthorized" });
 			if (await limitedByIp(c, "webhook")) return fail(c, 429, "rate_limited", "too many failed authentications");
 			return fail(c, 401, "unauthenticated", "wrong webhook authorization");
+		}
+		// One key for the route: bounds the objects and RevenueCat calls one leaked secret can cause; RevenueCat retries a 429.
+		if (!(await c.env.RL_WEBHOOK.limit({ key: "revenuecat" })).success) {
+			systemEvent(c.env, { event: "rate_limited", route: "webhook" });
+			return fail(c, 429, "rate_limited", "too many webhook requests");
 		}
 		const size = bodyCheck(c, MAX_WEBHOOK_BODY);
 		if (size === "length_required") return reply(c, LENGTH_REQUIRED);

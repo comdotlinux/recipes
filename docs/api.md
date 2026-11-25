@@ -215,6 +215,8 @@ App side:
 - `active` is true while now is before the end of the subscription as RevenueCat reports it. A store grace period after a failed renewal counts as active until the grace period ends. A refund or revocation makes it false at once.
 - `expiresAt` is that end (the grace-period end when it is later), or null when `active` is false.
 - If RevenueCat cannot be reached, the stored entitlement is honoured until 24 hours after its end, then `active` is false.
+- An active entitlement is re-read from RevenueCat at most once a day even without a webhook, so a refund whose webhook was lost ends access within a day.
+- One store subscription serves one account: the RevenueCat restore behaviour is set to "keep with original App User ID"; if a transfer happens anyway, the account it was transferred away from loses the entitlement at its next refresh.
 - `storage.capBytes` follows `active`: 524,288,000 while active, otherwise 52,428,800. A lapsed subscriber who stores more keeps everything; only new picture uploads answer 413 `storage_cap`.
 
 Quota and `402 quota_exhausted` on `POST /imports`:
@@ -228,7 +230,8 @@ Quota and `402 quota_exhausted` on `POST /imports`:
 Not called by the app. RevenueCat posts every subscription event to `POST /v1/webhooks/revenuecat`.
 
 - Authorisation: the dashboard's webhook "Authorization header value" is set to exactly the value of the Worker secret `REVENUECAT_WEBHOOK_SECRET`; the Worker compares the whole `Authorization` header with it in constant time before reading the body. Wrong or missing: 401 `unauthenticated` (and repeated failures from one IP: 429).
-- `Content-Length` is required (411 `length_required`); bodies over 64 KB answer 413 `body_too_large`; a body that is not JSON with `event.type` answers 400 `invalid_body`.
+- After the secret check the route is limited to 120 requests a minute in total; beyond that it answers 429 `rate_limited` and RevenueCat retries later.
+- `Content-Length` is required (411 `length_required`); bodies over 64 KB answer 413 `body_too_large`; a body that is not JSON with `event.type`, or with more than 5 ids in `transferred_from` or `transferred_to`, answers 400 `invalid_body`.
 - The payload is a trigger only: the Worker takes `event.app_user_id`, and for `TRANSFER` also `event.transferred_from` and `event.transferred_to`, keeps the values that have the shape of our user ids (43 base64url characters), and schedules a refresh from RevenueCat's REST record for each account that exists. Ids of other shapes and ids without an account are ignored; they never create storage. Answer: 200 `{ "received": true }`, before RevenueCat is asked.
 - The refresh runs in the user's object, retried with backoff (up to 10 tries) while RevenueCat is unreachable. Replays and out-of-order events only cause another read of the same record, so they are harmless. An account being deleted ignores webhooks.
 

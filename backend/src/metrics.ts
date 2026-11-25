@@ -9,7 +9,7 @@ export type UserEvent =
 	| { event: "import_outcome"; kind: string; outcome: string; durationMs: number }
 	| { event: "quota_denied"; reason: string }
 	| { event: "report"; kind: string; reason: string }
-	// trigger: webhook | client | stale | local; outcome: active | inactive | unavailable | gave_up
+	// trigger: webhook | client | stale | daily | local; outcome: active | inactive | unavailable | gave_up
 	| { event: "entitlement_refresh"; trigger: string; outcome: string };
 
 /** No content, no URLs, no user text: only the event, fixed codes and a duration. */

@@ -12,7 +12,7 @@ import transfer from "../fixtures/revenuecat/transfer.json";
 import { FREE_CAP_BYTES, SUBSCRIBER_CAP_BYTES } from "../../src/images";
 import { rowCounts } from "../../src/storage/migrations";
 import { REFRESH_TASK_TRIES } from "../../src/user-do";
-import { REVENUECAT, type Session, call, inObject, interceptOutbound, signIn, userStub, uuid } from "./helpers";
+import { REVENUECAT, type Session, call, inObject, interceptOutbound, signIn as helperSignIn, userStub, uuid } from "./helpers";
 
 const HOUR = 3_600_000;
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -23,8 +23,15 @@ const FIXTURE_OTHER = "B".repeat(43);
 // ---- RevenueCat stand-in at the fetch level: `rc` decides the subscriber record per user id; null = unreachable ----
 
 type RcAnswer = { expires?: number | null; grace?: number | null; refunded?: number | null } | "none" | null;
-let rc: (userId: string) => RcAnswer = () => null;
+let rc: (userId: string) => RcAnswer | Promise<RcAnswer> = () => null;
 let rcCalls: string[] = [];
+/** Accounts of the running test. Objects of earlier tests may still ask RevenueCat from their alarms; those calls are not counted. */
+let mine = new Set<string>();
+const signIn = async () => {
+	const s = await helperSignIn();
+	mine.add(s.userId);
+	return s;
+};
 const record = (r: Exclude<RcAnswer, null>) => {
 	const body = structuredClone(subscriber) as unknown as {
 		subscriber: { entitlements: { [k: string]: Record<string, unknown> }; subscriptions: { [k: string]: Record<string, unknown> } };
@@ -42,14 +49,16 @@ const record = (r: Exclude<RcAnswer, null>) => {
 beforeEach(() => {
 	rc = () => null;
 	rcCalls = [];
+	mine = new Set();
 	const spy = interceptOutbound();
 	const base = spy.getMockImplementation()!;
 	spy.mockImplementation(async (input, init) => {
 		const url = new Request(input, init).url;
 		if (!url.startsWith(REVENUECAT)) return base(input, init);
 		const userId = decodeURIComponent(url.split("/").pop()!);
+		if (!mine.has(userId)) return new Response(null, { status: 503 });
 		rcCalls.push(userId);
-		const answer = rc(userId);
+		const answer = await rc(userId);
 		return answer === null ? new Response(null, { status: 503 }) : Response.json(record(answer));
 	});
 });
@@ -353,19 +362,29 @@ describe("RevenueCat webhook (AC20)", () => {
 		});
 	}
 
-	it("a transfer refreshes both accounts", async () => {
-		const [from, to] = [await signIn(), await signIn()];
-		rc = (id) => (id === to.userId ? {} : "none");
-		await store(from, { active: true, expiresAt: Date.now() + HOUR });
-		expect((await hook(event(transfer, to.userId, from.userId))).status).toBe(200);
-		await runDurableObjectAlarm(userStub(from.userId));
-		await runDurableObjectAlarm(userStub(to.userId));
-		expect(rcCalls.sort()).toEqual([from.userId, to.userId].sort());
-		expect([(await me(from)).entitlement.active, (await me(to)).entitlement.active]).toEqual([false, true]);
+	// Safe also if the dashboard's restore behaviour were set to transfer: the old account loses the subscription at its refresh.
+	for (const fromFirst of [true, false]) {
+		it(`a transfer refreshes both accounts; after both refreshes they are never active at once (${fromFirst ? "source" : "destination"} first)`, async () => {
+			const [from, to] = [await signIn(), await signIn()];
+			rc = (id) => (id === to.userId ? {} : "none");
+			await store(from, { active: true, expiresAt: Date.now() + 30 * 24 * HOUR });
+			expect((await hook(event(transfer, to.userId, from.userId))).status).toBe(200);
+			for (const s of fromFirst ? [from, to] : [to, from]) await runDurableObjectAlarm(userStub(s.userId));
+			expect(rcCalls.sort()).toEqual([from.userId, to.userId].sort());
+			expect([(await me(from)).entitlement.active, (await me(to)).entitlement.active]).toEqual([false, true]);
+		});
+	}
+
+	it("a transfer list longer than 5 ids is refused with 400", async () => {
+		const many = Array.from({ length: 6 }, (_, i) => String.fromCharCode(67 + i).repeat(43));
+		const res = await hook({ event: { type: "TRANSFER", transferred_from: many, transferred_to: [FIXTURE_USER] } });
+		expect([res.status, await code(res)]).toEqual([400, "invalid_body"]);
+		expect((await hook({ event: { type: "TRANSFER", transferred_from: many.slice(0, 5), transferred_to: [FIXTURE_USER] } })).status).toBe(200);
 	});
 
 	it("ignores ids of another shape and never creates storage for an id without an account", async () => {
 		const unknown = "C".repeat(43);
+		mine.add(unknown);
 		expect((await hook(event(initialPurchase, "$RCAnonymousID:8069238d6049ce87cc529853916d624c"))).status).toBe(200);
 		expect((await hook(event(initialPurchase, unknown))).status).toBe(200);
 		expect(await inObject(unknown, (_i, st) => rowCounts(st.storage.sql).size)).toBe(0);
@@ -422,6 +441,45 @@ describe("RevenueCat webhook (AC20)", () => {
 	});
 });
 
+describe("refresh ordering and missed webhooks (security review M3)", () => {
+	for (const olderLast of [true, false]) {
+		it(`an older RevenueCat answer never overwrites a newer one (${olderLast ? "older" : "newer"} answer arrives last)`, async () => {
+			const s = await signIn();
+			const t = Date.now();
+			let release!: () => void;
+			const gate = new Promise<void>((r) => (release = r));
+			// The refresh started at t sees the subscription; the one started at t + 1 sees the refund.
+			const older: RcAnswer = {};
+			const newer: RcAnswer = { refunded: t };
+			const slow = olderLast ? older : newer;
+			const answers = [async () => (await gate, slow), async () => (olderLast ? newer : older)];
+			rc = () => answers.shift()!();
+			const run = (at: number) => inObject(s.userId, (instance) => instance.refreshTask(at, 0));
+			const first = run(olderLast ? t : t + 1);
+			await vi.waitFor(() => expect(rcCalls).toHaveLength(1));
+			await run(olderLast ? t + 1 : t);
+			release();
+			await first;
+			const stored = JSON.parse((await meta(s, "entitlement"))!) as { active: boolean };
+			expect([stored.active, await meta(s, "entitlement_at")]).toEqual([false, String(t + 1)]);
+		});
+	}
+
+	it("a refund whose webhook was lost ends access at the first reservation more than 24 hours later", async () => {
+		const s = await ready();
+		await setMeta(s, "free_import_used_at", "1");
+		await subscribed(s);
+		rc = () => ({ refunded: Date.now() - 1000 }); // no webhook arrives
+		const calls = rcCalls.length;
+		await importDone(s); // within the day: the stored record is used, RevenueCat is not asked
+		expect(rcCalls.length).toBe(calls);
+		await setMeta(s, "entitlement_tried_at", String(Date.now() - 25 * HOUR)); // a day later
+		const res = await startImport(s);
+		expect([res.status, await code(res)]).toEqual([402, "quota_exhausted"]);
+		expect(rcCalls.length).toBe(calls + 1);
+	});
+});
+
 describe("local subscription switch (local entry only)", () => {
 	const key = env.REVENUECAT_API_KEY;
 	afterEach(() => {
@@ -450,5 +508,18 @@ describe("local subscription switch (local entry only)", () => {
 		const s = await signIn();
 		expect((await toggle(null, true)).status).toBe(401);
 		expect((await toggle(s, "yes")).status).toBe(400);
+	});
+});
+
+// Last in the file: it uses up the route's rate limit for the rest of the minute.
+describe("webhook rate limit (security review M3)", () => {
+	it("an authorised webhook beyond 120 a minute answers 429, so RevenueCat retries it", async () => {
+		const ping = () => hook({ event: { type: "TEST", app_user_id: "not-one-of-ours" } });
+		const statuses: number[] = [];
+		for (let i = 0; i < 125; i++) statuses.push((await ping()).status);
+		expect(statuses).toContain(429);
+		const limited = await ping();
+		expect([limited.status, await code(limited)]).toEqual([429, "rate_limited"]);
+		expect((await hook({ event: { type: "TEST" } }, { auth: "Bearer wrong" })).status).toBe(401); // the secret is checked first
 	});
 });
