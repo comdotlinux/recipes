@@ -78,7 +78,7 @@ async function fetchKeys(url: string): Promise<{ jwks: JSONWebKeySet; lifetime: 
 }
 
 /** The provider's key set; `refresh` asks for a new set because a token named an unknown key id. */
-async function providerKeys(url: string, now: number, refresh: boolean): Promise<JSONWebKeySet | null> {
+export async function providerKeys(url: string, now: number, refresh: boolean): Promise<JSONWebKeySet | null> {
 	const cached = jwksCache.get(url);
 	if (cached && !refresh && now < cached.fetchedAt + cached.lifetime) return cached.jwks;
 	if (refresh && now - (lastFetchAttempt.get(url) ?? -Infinity) < REFRESH_COOLDOWN_MS) return null;
@@ -98,7 +98,7 @@ export async function verifyIdToken(
 	nonce: string,
 	env: Env,
 	now: number,
-): Promise<{ sub: string } | null | "unavailable"> {
+): Promise<{ sub: string; aud: string } | null | "unavailable"> {
 	const config = PROVIDERS[provider];
 	const audiences = config
 		.audiences(env)
@@ -133,7 +133,9 @@ export async function verifyIdToken(
 		const { payload } = result;
 		if (typeof payload.sub !== "string" || payload.sub.length === 0) return null;
 		if (payload.nonce !== (await config.nonceClaim(nonce))) return null;
-		return { sub: payload.sub };
+		// The audience that matched is the client id (bundle id, Services ID or web client id) the token was issued to.
+		const aud = [payload.aud].flat().find((a): a is string => typeof a === "string" && audiences.includes(a));
+		return { sub: payload.sub, aud: aud! };
 	} catch {
 		// Any jose error (signature, alg, kid, iss, aud, exp, malformed token) means "not valid".
 		return null;

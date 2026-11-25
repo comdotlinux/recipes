@@ -5,6 +5,8 @@
 // is deployed; local workerd does not implement jurisdictions, so env.local leaves it empty. TURNSTILE_SITE_KEY is public;
 // env.local uses Cloudflare's public always-pass test site key and test secret
 // (https://developers.cloudflare.com/turnstile/troubleshooting/testing/); only env.local may contain them. Bindings are not inheritable, so each environment repeats them.
+// Account deletion (M6): secrets REVENUECAT_V2_API_KEY (a RevenueCat v2 secret key with customer_information:customers:read_write)
+// and APPLE_P8 (the Sign in with Apple private key, PEM); public vars REVENUECAT_PROJECT_ID and APPLE_KEY_ID, filled by the owner.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "recipes",
@@ -13,12 +15,14 @@
   // fetch() to a hostname of our own zone goes through Cloudflare's front door, not straight to the origin
   // (https://developers.cloudflare.com/workers/configuration/compatibility-flags/, "Global fetch() strictly public", checked 2026-11-24).
   "compatibility_flags": ["global_fetch_strictly_public"],
-  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/v1/*", "/turnstile.html", "/s", "/.well-known/*"] },
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["UserDO"] }],
   "durable_objects": { "bindings": [{ "name": "USER_DO", "class_name": "UserDO" }] },
-  "secrets": { "required": ["USER_ID_PEPPER", "SERVER_KEY", "TURNSTILE_SECRET", "REVENUECAT_API_KEY", "REVENUECAT_WEBHOOK_SECRET"] },
+  "secrets": { "required": ["USER_ID_PEPPER", "SERVER_KEY", "TURNSTILE_SECRET", "REVENUECAT_API_KEY", "REVENUECAT_WEBHOOK_SECRET", "REVENUECAT_V2_API_KEY", "APPLE_P8", "CF_API_TOKEN_READ", "ALERT_WEBHOOK_URL"] },
   "vars": { "APPLE_AUDIENCES": "", "GOOGLE_AUDIENCES": "", "DO_JURISDICTION": "eu", "TURNSTILE_SITE_KEY": "",
-    "REVENUECAT_API_BASE": "https://api.revenuecat.com/v1", "REVENUECAT_ENTITLEMENT": "recipes_pro" },
+    "REVENUECAT_API_BASE": "https://api.revenuecat.com/v1", "REVENUECAT_ENTITLEMENT": "recipes_pro",
+      "REVENUECAT_PROJECT_ID": "", "APPLE_KEY_ID": "", "APPLE_TEAM_ID": "",
+      "APP_HOST": "", "ADMIN_HOST": "", "ACCESS_TEAM_DOMAIN": "", "ACCESS_AUD": "", "ADMIN_EMAILS": "", "CF_ACCOUNT_ID": "", "METRICS_DATASET": "recipes_metrics_toplevel" },
   "ai": { "binding": "AI" },
   // Browser Run Quick Actions for GET /recipes/:id/pdf (src/pdf.ts); env.local has none, so the route answers 503 there.
   "browser": { "binding": "BROWSER" },
@@ -57,7 +61,13 @@
         "SERVER_KEY": "dev-only-server-key",
         // No RevenueCat key locally: the local entry then uses src/testing/local-billing.ts (README "Try the subscription locally").
         "REVENUECAT_API_BASE": "https://api.revenuecat.com/v1",
-        "REVENUECAT_ENTITLEMENT": "recipes_pro"
+        "REVENUECAT_ENTITLEMENT": "recipes_pro",
+        // No v2 key and no Apple key locally: account deletion has nothing at RevenueCat or Apple to remove there.
+        "REVENUECAT_PROJECT_ID": "",
+        "APPLE_KEY_ID": "", "APPLE_TEAM_ID": "",
+        // No admin host, no Analytics Engine account and no alert hook locally.
+        "APP_HOST": "", "ADMIN_HOST": "", "ACCESS_TEAM_DOMAIN": "", "ACCESS_AUD": "", "ADMIN_EMAILS": "", "CF_ACCOUNT_ID": "",
+        "METRICS_DATASET": "recipes_metrics_local"
       },
       "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "recipes_metrics_local" }],
       "ratelimits": [
@@ -67,13 +77,19 @@
         { "name": "RL_WEBHOOK", "namespace_id": "8004", "simple": { "limit": 120, "period": 60 } }
       ]
     },
+    // Staging sits behind the zone (plan v12): its own host, no workers.dev; preview URLs stay on for staging only.
     "staging": {
-      "workers_dev": true,
+      "workers_dev": false,
       "preview_urls": true,
+      "routes": [{ "pattern": "recipe-staging.munich-tech.de", "custom_domain": true }],
+      // src/cron.ts: alert thresholds every 30 minutes (plan 4.10).
+      "triggers": { "crons": ["*/30 * * * *"] },
       "durable_objects": { "bindings": [{ "name": "USER_DO", "class_name": "UserDO" }] },
-      "secrets": { "required": ["USER_ID_PEPPER", "SERVER_KEY", "TURNSTILE_SECRET", "REVENUECAT_API_KEY", "REVENUECAT_WEBHOOK_SECRET"] },
+      "secrets": { "required": ["USER_ID_PEPPER", "SERVER_KEY", "TURNSTILE_SECRET", "REVENUECAT_API_KEY", "REVENUECAT_WEBHOOK_SECRET", "REVENUECAT_V2_API_KEY", "APPLE_P8", "CF_API_TOKEN_READ", "ALERT_WEBHOOK_URL"] },
       "vars": { "APPLE_AUDIENCES": "", "GOOGLE_AUDIENCES": "", "DO_JURISDICTION": "eu", "TURNSTILE_SITE_KEY": "",
-        "REVENUECAT_API_BASE": "https://api.revenuecat.com/v1", "REVENUECAT_ENTITLEMENT": "recipes_pro" },
+        "REVENUECAT_API_BASE": "https://api.revenuecat.com/v1", "REVENUECAT_ENTITLEMENT": "recipes_pro",
+      "REVENUECAT_PROJECT_ID": "", "APPLE_KEY_ID": "", "APPLE_TEAM_ID": "",
+        "APP_HOST": "recipe-staging.munich-tech.de", "ADMIN_HOST": "", "ACCESS_TEAM_DOMAIN": "", "ACCESS_AUD": "", "ADMIN_EMAILS": "", "CF_ACCOUNT_ID": "", "METRICS_DATASET": "recipes_metrics_staging" },
       "ai": { "binding": "AI" },
       "browser": { "binding": "BROWSER" },
       "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "recipes_metrics_staging" }],
@@ -87,10 +103,14 @@
     "production": {
       "workers_dev": false,
       "preview_urls": false,
+      "routes": [{ "pattern": "recipe.munich-tech.de", "custom_domain": true }, { "pattern": "recipe-admin.munich-tech.de", "custom_domain": true }],
+      "triggers": { "crons": ["*/30 * * * *"] },
       "durable_objects": { "bindings": [{ "name": "USER_DO", "class_name": "UserDO" }] },
-      "secrets": { "required": ["USER_ID_PEPPER", "SERVER_KEY", "TURNSTILE_SECRET", "REVENUECAT_API_KEY", "REVENUECAT_WEBHOOK_SECRET"] },
+      "secrets": { "required": ["USER_ID_PEPPER", "SERVER_KEY", "TURNSTILE_SECRET", "REVENUECAT_API_KEY", "REVENUECAT_WEBHOOK_SECRET", "REVENUECAT_V2_API_KEY", "APPLE_P8", "CF_API_TOKEN_READ", "ALERT_WEBHOOK_URL"] },
       "vars": { "APPLE_AUDIENCES": "", "GOOGLE_AUDIENCES": "", "DO_JURISDICTION": "eu", "TURNSTILE_SITE_KEY": "",
-        "REVENUECAT_API_BASE": "https://api.revenuecat.com/v1", "REVENUECAT_ENTITLEMENT": "recipes_pro" },
+        "REVENUECAT_API_BASE": "https://api.revenuecat.com/v1", "REVENUECAT_ENTITLEMENT": "recipes_pro",
+      "REVENUECAT_PROJECT_ID": "", "APPLE_KEY_ID": "", "APPLE_TEAM_ID": "",
+        "APP_HOST": "recipe.munich-tech.de", "ADMIN_HOST": "recipe-admin.munich-tech.de", "ACCESS_TEAM_DOMAIN": "", "ACCESS_AUD": "", "ADMIN_EMAILS": "", "CF_ACCOUNT_ID": "", "METRICS_DATASET": "recipes_metrics" },
       "ai": { "binding": "AI" },
       "browser": { "binding": "BROWSER" },
       "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "recipes_metrics" }],

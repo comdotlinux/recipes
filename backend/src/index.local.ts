@@ -1,6 +1,8 @@
 // Local dev and test entry only (wrangler env "local"). The production entry never imports src/testing/.
 import type { ModelRunner } from "./ai/gateway";
 import { createApi } from "./api";
+import { createAdmin } from "./admin/index";
+import { dispatch } from "./worker";
 import type { EntitlementSource } from "./billing/revenuecat";
 import type { Result } from "./http";
 import { localAi } from "./testing/local-ai";
@@ -36,6 +38,7 @@ export class UserDO extends ProductionUserDO {
 }
 
 const api = createApi({ testProvider: verifyTestIdToken });
+const admin = createAdmin();
 
 // Should this entry ever be deployed by mistake, it answers nothing outside the machine or the Android emulator's host alias.
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "10.0.2.2"]);
@@ -47,6 +50,6 @@ export default {
 			return Response.json({ error: { code: "not_found", message: "local entry serves local hosts only" } }, { status: 404 });
 		}
 		if (url.pathname === LOCAL_ENTITLEMENT_PATH && request.method === "POST") return localEntitlementRoute(request, env);
-		return api.fetch(request, env, ctx);
+		return dispatch(api, admin, request, env, ctx);
 	},
 } satisfies ExportedHandler<Env>;

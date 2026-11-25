@@ -1,0 +1,7 @@
+{
+  "provider": "apple",
+  "idToken": "<provider id token>",
+  "nonce": "<value from /session/nonce>",
+  "turnstileToken": "<token from the Turnstile widget>",
+  "appleAuthCode": "<code, Apple only, optional>"
+}

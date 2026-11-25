@@ -347,7 +347,7 @@ Rules:
 - Picture checks are limited to 30 model calls per user and UTC day (each check of one picture is one call, also when the share then fails with 422 or 503); beyond that `POST /recipes/:id/shares` answers 429 `share_limit` until the next day.
 - Accept checks the recipient's recipe count and recipe text first, so a recipient at one of these limits gets 409 or 413 without using up one of the link's ten recipient places.
 - Translations count toward the 20 MB of recipe text (`recipe_storage_cap`); a translation that would pass it ends as `invalid` and is refunded.
-- Not decided yet: suspended users can still create, open, accept and report links; this is revisited when suspension is built (Milestone M6).
+- Suspension (decided in Milestone M6): a suspended user cannot create, revoke, open or accept links or report one (403 `account_suspended`, see "Milestone M6"); links of a suspended owner answer 410 `share_gone` to everyone.
 
 ### PDF
 
@@ -370,6 +370,50 @@ Served by the Worker, not under `/v1`:
 
 Both `.well-known` files are JSON (`application/json`), without redirects, as the Android and Apple documentation require. They answer 404 while their variable is unset or malformed: the signing certificate fingerprint (Play App Signing) and the Apple team id are filled in by the provisioning step. App side: Android declares an `autoVerify` intent filter for `https://<host>` with `android:path="/s"` and reads the token from `intent.data` (the fragment) or the `shareToken` extra; iOS adds the associated domain `applinks:<host>` and reads the fragment of `NSUserActivity.webpageURL`. The app id is `com.linux.recipes` on both platforms. Fragments in app links: both platforms' matching rules can match on the fragment (`"#"` in Apple's `components` and in Android's dynamic App Link rules), so the system sees it; neither page states in words that the delivered URL keeps it, so this still has to be checked on a device (UNVERIFIED).
 
+## Milestone M6
+
+### Account deletion
+
+| Route | Request | Success | Errors |
+|-------|---------|---------|--------|
+| `DELETE /account` | none | 202 `{ "state": "deleting" }` | 401 |
+| `POST /account/delete-web` (no session; the web page; 404 while the page is not configured; only id tokens issued to the web client ids are accepted, an app token answers 401 `invalid_token`) | `WebDeletionRequest` (fixture `account_delete_web_request.json`) | 202 `{ "state": "deleting" }`, also when a deletion is already running | 400 `invalid_body`; 401 `invalid_turnstile`, `invalid_nonce`, `invalid_token`; 404 `no_account` (no account for this sign-in; nothing is created); 411; 429; 503 `provider_unavailable` |
+
+```jsonc
+// WebDeletionRequest: the SessionRequest without ageConfirmed; provider "apple" or "google" only
+{ "provider": "apple", "idToken": "<id token>", "nonce": "<value from /session/nonce>", "turnstileToken": "<token>", "appleAuthCode": "<code, optional>" }
+```
+
+- From the moment the answer is 202, every call with any of the user's sessions answers 401, and `POST /session` for the same provider account answers 409 `account_deleting` until the erasure is done. Share links of the account answer 410, later 404.
+- The server then, retrying each step until it is done: deletes the RevenueCat customer, revokes the Sign in with Apple token (when the account signed in with Apple and sent `appleAuthCode`), and erases everything. The store subscription is not cancelled by this: before calling `DELETE /account` the app shows that the subscription keeps billing and links to the store's subscription page. After 202 the app wipes its cache, pictures and token and returns to sign-in.
+- Signing in again afterwards creates a fresh, empty account. If the free import had been used, it stays used; a suspension stays in force with its reason; this month's AI units stay counted (the server keeps only these facts, for 12 months).
+- The RevenueCat and Apple steps are retried for at most 7 days; after that the erasure of the user's data runs anyway.
+- Sign in with Apple: the iOS app sends `appleAuthCode` in `POST /session` (already in `SessionRequest`); the server exchanges it once for the token that deletion revokes. Without it nothing can be revoked at Apple.
+- The web page `GET /account/delete` (Worker-rendered) offers the providers whose web client ids are configured; it answers 404 while none is.
+
+### Suspension
+
+A suspended account gets 403 on every route except `GET /me`, `GET /recipes`, `GET /images/:imageId`, `DELETE /session` and `DELETE /account` (and web deletion), which keep working, so a backup export and deletion stay possible:
+
+```jsonc
+// error_suspended.json
+{ "error": { "code": "account_suspended", "message": "...", "reason": "abusive_content" } }
+```
+
+Reason codes: `illegal_content`, `abusive_content`, `quota_abuse`, `payment_abuse` (a new code may be added; show unknown codes as "other"). `GET /me` shows `"state": "suspended"` and `"suspension": { "reason": "<code>" }` (fixture `me_suspended.json`). A job that was already running finishes and is charged; `GET /jobs/:id` answers 403 while suspended, so the outcome is seen after the suspension is lifted. Links of a suspended owner answer 410 `share_gone`.
+
+### What the app shows per account state
+
+| State (`GET /me` or the error) | App |
+|--------------------------------|-----|
+| `active` | normal use |
+| `suspended` (`GET /me`, or 403 `account_suspended` from any route) | a suspension screen with the reason in words, the appeal contact from the terms (`https://<host>/terms`), the note that a store subscription keeps billing with a link to the store's subscription page, and the actions that still work: view recipes, export a backup, sign out, delete the account |
+| deleting or erased (401 on every call after `DELETE /account`) | wipe local data and show sign-in; a sign-in during deletion gets 409 `account_deleting` ("deletion is still running, try again later") |
+
+### Web pages
+
+Served by the Worker on the app host, with HSTS and a strict CSP, without any challenge: `/privacy`, `/imprint`, `/terms` (English) and `/privacy/de`, `/imprint/de`, `/terms/de` (German); `/account/delete`. The app links to these.
+
 ## Module boundaries
 
 These signatures let people work on both sides at once. Change them only together with this section.
@@ -388,8 +432,8 @@ export function issueNonce(env: Env, now: number): Promise<string>;
 /** Signature and expiry only. Single use is enforced by the user's object with the returned id. */
 export function verifyNonce(nonce: string, env: Env, now: number): Promise<{ id: string; expiresAt: number } | null>;
 
-/** Subject of a valid id token whose nonce claim matches; null when it is invalid; "unavailable" when the provider's keys cannot be fetched. */
-export function verifyIdToken(provider: Provider, idToken: string, nonce: string, env: Env, now: number): Promise<{ sub: string } | null | "unavailable">;
+/** Subject of a valid id token whose nonce claim matches; null when it is invalid; "unavailable" when the provider's keys cannot be fetched. `aud` is the client id the token was issued to (M6: the Apple code exchange needs it). */
+export function verifyIdToken(provider: Provider, idToken: string, nonce: string, env: Env, now: number): Promise<{ sub: string; aud: string } | null | "unavailable">;
 
 /** base64url(HMAC-SHA256(USER_ID_PEPPER, provider + ":" + sub)), 43 characters. */
 export function deriveUserId(provider: Provider | "test", sub: string, env: Env): Promise<string>;

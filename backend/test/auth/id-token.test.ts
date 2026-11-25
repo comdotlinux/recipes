@@ -97,7 +97,7 @@ afterEach(() => {
 describe.each(["apple", "google"] as Provider[])("verifyIdToken(%s)", (provider) => {
 	it("accepts a valid token and returns its subject", async () => {
 		tick();
-		expect(await verifyIdToken(provider, await sign(provider), NONCE, env, now)).toEqual({ sub: `${provider}-user-1` });
+		expect(await verifyIdToken(provider, await sign(provider), NONCE, env, now)).toEqual({ sub: `${provider}-user-1`, aud: AUDIENCE[provider] });
 	});
 
 	it.each<[string, () => Promise<string>]>([
@@ -143,7 +143,7 @@ describe.each(["apple", "google"] as Provider[])("verifyIdToken(%s)", (provider)
 	it("accepts any of several comma-separated audiences", async () => {
 		tick();
 		const several: Env = Object.assign({}, env, { APPLE_AUDIENCES: ` other.app , ${AUDIENCE.apple}`, GOOGLE_AUDIENCES: `other.app,${AUDIENCE.google} ` });
-		expect(await verifyIdToken(provider, await sign(provider), NONCE, several, now)).toEqual({ sub: `${provider}-user-1` });
+		expect(await verifyIdToken(provider, await sign(provider), NONCE, several, now)).toEqual({ sub: `${provider}-user-1`, aud: AUDIENCE[provider] });
 	});
 
 	it("reports unavailable when the key endpoint fails", async () => {
@@ -234,7 +234,7 @@ describe("provider key caching", () => {
 			serving[provider] = [...keys[provider].published, keys[provider].nextJwk];
 			now = t0 + 60_000;
 			const rotated = await sign(provider, { kid: `${provider}-next`, key: keys[provider].next });
-			expect(await verifyIdToken(provider, rotated, NONCE, env, now)).toEqual({ sub: `${provider}-user-1` });
+			expect(await verifyIdToken(provider, rotated, NONCE, env, now)).toEqual({ sub: `${provider}-user-1`, aud: AUDIENCE[provider] });
 			expect(fetches.length).toBe(2);
 			expect(await verifyIdToken(provider, rotated, NONCE, env, now + 1)).not.toBeNull();
 			expect(fetches.length).toBe(2);

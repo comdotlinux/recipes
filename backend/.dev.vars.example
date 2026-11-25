@@ -8,3 +8,6 @@ TURNSTILE_SECRET=
 SERVER_KEY_PREVIOUS=
 REVENUECAT_API_KEY=
 REVENUECAT_WEBHOOK_SECRET=
+# Account deletion: leave both out locally (nothing at RevenueCat or Apple to delete there).
+REVENUECAT_V2_API_KEY=
+APPLE_P8=

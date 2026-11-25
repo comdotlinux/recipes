@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   checkClientLines,
+  checkDataInventory,
+  checkRestoreRunbook,
+  metaKeys,
+  metricEvents,
+  schemaTables,
   checkGradients,
   checkI18n,
   checkPurple,
@@ -200,5 +205,52 @@ describe("CLI", () => {
     expect(bad.exitCode).toBe(1);
     expect(bad.stdout.toString()).toContain("FAIL no-purple-colours");
     expect(runAll(fixture({})).some((r) => r.status === "fail")).toBe(false);
+  });
+});
+
+describe("data inventory (AC44)", () => {
+  const base = {
+    "backend/src/storage/migrations.ts": 'sql.exec("CREATE TABLE IF NOT EXISTS meta (k)"); sql.exec("CREATE TABLE recipes (id)");',
+    "backend/src/user-do.ts": 'export const DELETION_STEPS = ["apple"] as const; this.setMeta("state", s); this.meta("rev"); const KEEP_DAYS = 3;',
+    "backend/src/metrics.ts": '| { event: "request"; group: string } | { event: "share" | "pdf"; outcome: string }',
+    "backend/legal/privacy.en.html": "OWNER-LEGAL-PLACEHOLDER",
+    "backend/legal/privacy.de.html": "OWNER-LEGAL-PLACEHOLDER",
+  };
+  const all = "`meta` `recipes` `state` `rev` `deletion_done_apple` `request` `share` `pdf` `KEEP_DAYS` Cloudflare RevenueCat Apple Google";
+  test("parsers", () => {
+    expect(schemaTables(base["backend/src/storage/migrations.ts"])).toEqual(["meta", "recipes"]);
+    expect(metaKeys(base["backend/src/user-do.ts"])).toEqual(["deletion_done_apple", "rev", "state"]);
+    expect(metricEvents(base["backend/src/metrics.ts"])).toEqual(["pdf", "request", "share"]);
+  });
+  test("passes when everything is listed; the placeholder policy is not enforced", () => {
+    const [inv, policy] = checkDataInventory(fixture({ ...base, "docs/data-inventory.md": all }));
+    expect(inv.status).toBe("pass");
+    expect(policy.status).toBe("not-enforced");
+  });
+  test("fails on a table, key, event or processor missing from the inventory", () => {
+    const [inv] = checkDataInventory(fixture({ ...base, "docs/data-inventory.md": all.replace("`recipes`", "").replace("`pdf`", "").replace("Google", "") }));
+    expect(inv.status).toBe("fail");
+    expect(inv.lines.join("\n")).toMatch(/table `recipes`[\s\S]*metric event `pdf`[\s\S]*processor Google/);
+  });
+  test("a filled privacy policy must name every processor and retention period", () => {
+    const policy = "Cloudflare RevenueCat Apple Google 5 7 30 90 3 12";
+    const ok = checkDataInventory(fixture({ ...base, "docs/data-inventory.md": all, "backend/legal/privacy.en.html": policy, "backend/legal/privacy.de.html": policy }));
+    expect(ok[1].status).toBe("pass");
+    const bad = checkDataInventory(fixture({ ...base, "docs/data-inventory.md": all, "backend/legal/privacy.en.html": "Cloudflare", "backend/legal/privacy.de.html": policy }));
+    expect(bad[1].status).toBe("fail");
+  });
+  test("the real repository passes", () => {
+    expect(checkDataInventory(process.cwd())[0].status).toBe("pass");
+  });
+});
+
+describe("restore runbook (AC40)", () => {
+  test("missing file is pending, a missing rule fails, an empty record is not enforced, a dated record passes", () => {
+    expect(checkRestoreRunbook(fixture({})).status).toBe("not-enforced");
+    expect(checkRestoreRunbook(fixture({ "docs/runbooks/restore.md": "# Restore" })).status).toBe("fail");
+    const rule = "Never restore an object to a point before its erasure.\n\n## Drill record\n\nNot run yet.\n";
+    expect(checkRestoreRunbook(fixture({ "docs/runbooks/restore.md": rule })).status).toBe("not-enforced");
+    const done = rule.replace("Not run yet.", "| Date | Result |\n|---|---|\n| 2026-12-01 | restored |");
+    expect(checkRestoreRunbook(fixture({ "docs/runbooks/restore.md": done })).status).toBe("pass");
   });
 });
