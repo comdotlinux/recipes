@@ -2,8 +2,10 @@ import { env, runDurableObjectAlarm } from "cloudflare:test";
 import { exportPKCS8, generateKeyPair } from "jose";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MIGRATIONS } from "../../src/storage/migrations";
-import { DAY_MS, TOMBSTONE_KEYS, TOMBSTONE_TTL_MS, type UserDO } from "../../src/user-do";
-import { REVENUECAT, TURNSTILE_OK, call, inObject, interceptOutbound, json, nonce, providerToken, signIn, userStub, type Session } from "./helpers";
+import { newShareToken } from "../../src/share";
+import { DAY_MS, THIRD_PARTY_DEADLINE_MS, TOMBSTONE_KEYS, TOMBSTONE_TTL_MS, type UserDO } from "../../src/user-do";
+import inputFixture from "../../../contract/fixtures/recipe_input.json";
+import { REVENUECAT, TURNSTILE_OK, call, inObject, interceptOutbound, json, nonce, providerToken, signIn, userStub, uuid, type Session } from "./helpers";
 
 // ---- outbound: RevenueCat v2 customer delete and Apple token endpoints, answered per test ----
 
@@ -12,6 +14,9 @@ let hits: Hit[] = [];
 let rcDelete: () => number = () => 200;
 let appleToken: () => Response = () => Response.json({ refresh_token: "apple-refresh-1", access_token: "a", token_type: "bearer", expires_in: 3600, id_token: "x" });
 let appleRevoke: () => number = () => 200;
+/** While set, RevenueCat v1 reads (entitlement refresh) wait for it: a request's await that deletion can overtake. */
+let v1Gate: Promise<void> | null = null;
+let v1Waiting = 0;
 
 const testEnv = env as unknown as Record<string, string | undefined>;
 const appleKey = await exportPKCS8((await generateKeyPair("ES256", { extractable: true })).privateKey);
@@ -26,6 +31,11 @@ beforeEach(() => {
 	spy.mockImplementation(async (input, init) => {
 		const req = new Request(input, init);
 		const hit = { url: req.url, method: req.method, body: req.method === "GET" ? "" : new TextDecoder().decode(await req.clone().arrayBuffer()), auth: req.headers.get("authorization") };
+		if (req.url.startsWith(`${REVENUECAT}v1/`) && v1Gate) {
+			v1Waiting++;
+			await v1Gate;
+			return new Response(null, { status: 503 });
+		}
 		if (req.url.startsWith(`${REVENUECAT}v2/`)) {
 			hits.push(hit);
 			return new Response(null, { status: rcDelete() });
@@ -103,7 +113,8 @@ describe("DELETE /account (plan 4.7, AC28)", () => {
 		const exchange = new URLSearchParams(hits[0].body);
 		expect([exchange.get("grant_type"), exchange.get("code"), exchange.get("client_id")]).toEqual(["authorization_code", "code-1", "local.test.apple"]);
 		expect(exchange.get("client_secret")!.split(".")).toHaveLength(3);
-		expect((await metaRows(s.userId)).apple_auth_code).toBeUndefined();
+		expect((await metaRows(s.userId)).apple_auth_codes).toBeUndefined();
+		expect(JSON.parse((await metaRows(s.userId)).apple_refresh_tokens)).toEqual({ "local.test.apple": "apple-refresh-1" });
 		hits = [];
 		expect((await deleteAccount(s)).status).toBe(202);
 		await alarm(s.userId);
@@ -316,5 +327,206 @@ describe("DELETE /account (plan 4.7, AC28)", () => {
 		await inObject(t.userId, (i) => i.erase(until));
 		expect(await tables(t.userId)).toEqual([]);
 		expect(await inObject(t.userId, (_i, st) => st.storage.getAlarm())).toBeNull();
+	});
+});
+
+describe("security review M6 fixes", () => {
+	const onlyTombstoneKeys = async (userId: string) => {
+		const keys = Object.keys(await metaRows(userId));
+		expect(keys.filter((k) => !(TOMBSTONE_KEYS as readonly string[]).includes(k))).toEqual([]);
+	};
+
+	it("finding 1: a suspended user who deletes and signs in again is still suspended with the same reason", async () => {
+		const s = await signIn("escaper");
+		await userStub(s.userId).setSuspended("abusive_content", "op@example.org");
+		await deleteAccount(s);
+		await alarm(s.userId);
+		expect(await metaRows(s.userId)).toMatchObject({ state: "tombstone", suspension_reason: "abusive_content" });
+		const back = await signIn("escaper");
+		const me = (await (await call("/me", { token: back.token })).json()) as { state: string; suspension: { reason: string } };
+		expect(me).toMatchObject({ state: "suspended", suspension: { reason: "abusive_content" } });
+		expect((await call("/me/consent", { method: "DELETE", token: back.token })).status).toBe(403);
+	});
+
+	it("finding 11: deleting and signing in again keeps this month's quota count", async () => {
+		const s = await signIn("quota-reset");
+		const period = new Date().toISOString().slice(0, 7);
+		await sql(s.userId, "INSERT INTO usage (period, count) VALUES (?, 3)", period);
+		await deleteAccount(s);
+		await alarm(s.userId);
+		expect(JSON.parse((await metaRows(s.userId)).month_usage)).toEqual({ period, count: 3 });
+		const back = await signIn("quota-reset");
+		const me = (await (await call("/me", { token: back.token })).json()) as { quota: { monthUsed: number } };
+		expect(me.quota.monthUsed).toBe(3);
+		expect((await metaRows(back.userId)).month_usage).toBeUndefined();
+	});
+
+	describe("finding 2: third-party steps never hold the erasure longer than 7 days", () => {
+		const overdue = (userId: string) => sql(userId, "UPDATE meta SET value = ? WHERE key = 'deletion_started_at'", String(Date.now() - THIRD_PARTY_DEADLINE_MS - 1));
+		const abandoned = (calls: unknown[][]) => calls.map((c) => (c[0] as { blobs?: string[] }).blobs).filter((b) => b?.[1] === "third_party_abandoned");
+
+		it("RevenueCat 401 or 403 keeps retrying within 7 days, then the erasure runs with an abandonment metric", async () => {
+			for (const status of [401, 403]) {
+				const s = await signIn(`rc-${status}`);
+				rcDelete = () => status;
+				await deleteAccount(s);
+				await alarm(s.userId);
+				expect((await metaRows(s.userId)).state).toBe("deleting");
+				await overdue(s.userId);
+				await sql(s.userId, "UPDATE tasks SET due_at = 0");
+				const write = vi.spyOn(env.METRICS, "writeDataPoint");
+				await alarm(s.userId);
+				expect(await tables(s.userId)).toEqual([]);
+				expect(abandoned(write.mock.calls)).toEqual([["account_deletion", "third_party_abandoned", "revenuecat"]]);
+				write.mockRestore();
+			}
+		});
+
+		it("an empty REVENUECAT_PROJECT_ID or missing Apple key config is abandoned after 7 days too; 404 counts as done", async () => {
+			const s = await appleSignIn("no-config", "code-nc");
+			await alarm(s.userId);
+			testEnv.REVENUECAT_PROJECT_ID = "";
+			testEnv.APPLE_TEAM_ID = "";
+			await deleteAccount(s);
+			await alarm(s.userId);
+			expect((await metaRows(s.userId)).state).toBe("deleting");
+			await overdue(s.userId);
+			await sql(s.userId, "UPDATE tasks SET due_at = 0");
+			const write = vi.spyOn(env.METRICS, "writeDataPoint");
+			await alarm(s.userId);
+			expect(await tables(s.userId)).toEqual([]);
+			expect(abandoned(write.mock.calls)).toEqual([
+				["account_deletion", "third_party_abandoned", "revenuecat"],
+				["account_deletion", "third_party_abandoned", "apple"],
+			]);
+			write.mockRestore();
+			testEnv.REVENUECAT_PROJECT_ID = "proj1";
+			const t = await signIn("rc-404");
+			rcDelete = () => 404;
+			await deleteAccount(t);
+			await alarm(t.userId);
+			expect(await tables(t.userId)).toEqual([]);
+		});
+	});
+
+	it("finding 3: the app's and the web page's Apple refresh tokens are both revoked", async () => {
+		const s = await appleSignIn("two-tokens", "app-code");
+		await alarm(s.userId);
+		appleToken = () => Response.json({ refresh_token: "web-refresh" });
+		const n = await nonce();
+		const started = await userStub(s.userId).deleteAccountWeb({
+			nonceId: n.split(".")[0],
+			nonceExpiresAt: Date.now() + 300_000,
+			apple: { code: "web-code", clientId: "web.services.id", redirectUri: "https://recipe.example/account/delete" },
+		});
+		expect(started).toMatchObject({ status: 202 });
+		hits = [];
+		await alarm(s.userId);
+		const revoked = hits
+			.filter((h) => h.url.endsWith("/auth/revoke"))
+			.map((h) => new URLSearchParams(h.body))
+			.map((f) => [f.get("client_id"), f.get("token")]);
+		expect(revoked.sort()).toEqual([
+			["local.test.apple", "apple-refresh-1"],
+			["web.services.id", "web-refresh"],
+		]);
+		expect(new URLSearchParams(hits.find((h) => h.url.endsWith("/auth/token"))!.body).get("redirect_uri")).toBe("https://recipe.example/account/delete");
+		expect(await tables(s.userId)).toEqual([]);
+		appleToken = () => Response.json({ refresh_token: "apple-refresh-1" });
+	});
+
+	describe("item 12: a request that deletion overtakes during its await writes nothing", () => {
+		type Kind = "import" | "translation" | "image" | "share" | "accept" | "pdf";
+		const body = (v: unknown, headers: Record<string, string> = {}) => ({ body: JSON.stringify(v), headers: { "content-type": "application/json", ...headers } });
+
+		/** An account with a recipe, consent, the free import used (so a tombstone is written) and a due entitlement re-read. */
+		async function prepared(sub: string) {
+			const s = await signIn(sub);
+			const recipeId = uuid();
+			await call(`/recipes/${recipeId}`, { method: "PUT", token: s.token, ...body({ ...inputFixture, id: recipeId, imageIds: [] }, { "if-none-match": "*" }) });
+			await call("/me/consent", { method: "PUT", token: s.token, ...body({ version: 1 }) });
+			await sql(s.userId, "INSERT INTO meta (key, value) VALUES ('free_import_used_at', '1')");
+			await sql(s.userId, "INSERT INTO meta (key, value) VALUES ('entitlement', ?)", JSON.stringify({ active: true, expiresAt: new Date(Date.now() + DAY_MS).toISOString() }));
+			return { s, recipeId };
+		}
+
+		async function sharedByOther() {
+			const o = await signIn(`owner-${uuid()}`);
+			const recipeId = uuid();
+			await call(`/recipes/${recipeId}`, { method: "PUT", token: o.token, ...body({ ...inputFixture, id: recipeId, imageIds: [] }, { "if-none-match": "*" }) });
+			const shareId = "ab".repeat(16);
+			await sql(o.userId, "INSERT INTO shares (share_id, recipe_id, created_at, expires_at) VALUES (?, ?, ?, ?)", shareId, recipeId, Date.now(), Date.now() + DAY_MS);
+			return newShareToken(o.userId, shareId, env);
+		}
+
+		function late(kind: Kind, s: Session, recipeId: string, shareToken: string): Promise<Response> {
+			switch (kind) {
+				case "import":
+					return call("/imports", { method: "POST", token: s.token, ...body({ kind: "text", text: "Soup" }, { "idempotency-key": uuid() }) });
+				case "translation":
+					return call(`/recipes/${recipeId}/translations`, { method: "POST", token: s.token, ...body({ language: "en" }, { "idempotency-key": uuid() }) });
+				case "image":
+					return call(`/recipes/${recipeId}/images/${uuid()}`, { method: "PUT", token: s.token, body: new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1]), headers: { "content-type": "image/jpeg" } });
+				case "share":
+					return call(`/recipes/${recipeId}/shares`, { method: "POST", token: s.token });
+				case "accept":
+					return call("/shares/accept", { method: "POST", token: s.token, ...body({ shareToken }) });
+				case "pdf":
+					return call(`/recipes/${recipeId}/pdf`, { method: "GET", token: s.token });
+			}
+		}
+
+		async function overtake(kinds: Kind[], sub: string) {
+			const { s, recipeId } = await prepared(sub);
+			const shareToken = await sharedByOther();
+			let open: () => void = () => undefined;
+			v1Gate = new Promise((r) => (open = r));
+			v1Waiting = 0;
+			let pdfStarted = 0;
+			let pdfOpen: () => void = () => undefined;
+			const pdfGate = new Promise<void>((r) => (pdfOpen = r));
+			(env as unknown as { BROWSER?: unknown }).BROWSER = {
+				quickAction: async () => {
+					pdfStarted++;
+					await pdfGate;
+					return new Response(new Uint8Array([37, 80, 68, 70]), { headers: { "content-type": "application/pdf" } });
+				},
+			};
+			const pending = kinds.map((k) => late(k, s, recipeId, shareToken));
+			const viaRevenueCat = kinds.filter((k) => k !== "pdf").length;
+			await vi.waitFor(() => expect([v1Waiting >= Math.min(viaRevenueCat, 1), pdfStarted >= (kinds.includes("pdf") ? 1 : 0)]).toEqual([true, true]), { timeout: 5000, interval: 10 });
+			// Deletion starts and finishes while the requests wait (another session of the same user deletes).
+			const other = await signIn(sub);
+			expect((await deleteAccount(other)).status).toBe(202);
+			await alarm(s.userId);
+			open();
+			pdfOpen();
+			v1Gate = null;
+			const results = await Promise.all(pending);
+			(env as unknown as { BROWSER?: unknown }).BROWSER = undefined;
+			return { s, statuses: results.map((r) => r.status) };
+		}
+
+		for (const kind of ["import", "translation", "image", "share", "accept", "pdf"] as Kind[]) {
+			it(`${kind}: answers 401 and the object holds only the plain tombstone`, async () => {
+				const { s, statuses } = await overtake([kind], `late-${kind}`);
+				expect(statuses).toEqual([401]);
+				expect(await tables(s.userId)).toEqual(["meta", "tasks"]);
+				await onlyTombstoneKeys(s.userId);
+				expect(await inObject(s.userId, (_i, st) => st.storage.sql.exec("SELECT kind FROM tasks").toArray().map((r) => r.kind))).toEqual(["tombstone_expiry"]);
+			});
+		}
+
+		it("guard: a randomised mix of late calls never leaves a meta key outside the tombstone keys", { timeout: 30_000 }, async () => {
+			const all: Kind[] = ["import", "translation", "image", "share", "accept", "pdf"];
+			for (let round = 0; round < 3; round++) {
+				const kinds = all.filter(() => Math.random() < 0.7);
+				if (kinds.length === 0) kinds.push("import");
+				kinds.sort(() => Math.random() - 0.5);
+				const { s } = await overtake(kinds, `late-mix-${round}`);
+				expect([round, kinds, await tables(s.userId)]).toEqual([round, kinds, ["meta", "tasks"]]);
+				await onlyTombstoneKeys(s.userId);
+			}
+		});
 	});
 });

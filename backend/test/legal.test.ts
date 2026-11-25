@@ -36,3 +36,16 @@ describe("legal pages (AC29)", () => {
 		expect((await get("/no-such-file")).status).toBe(404);
 	});
 });
+
+describe("security headers on every answer (security review M6, finding 6)", () => {
+	it("asset, page, API answer, API error, 404 and the public /admin 404 all carry HSTS and nosniff; HTML also a CSP", async () => {
+		const paths = ["/", "/index.html", "/s", "/s/", "/s/index.html", "/terms", "/turnstile.html", "/account-delete.js", "/v1/health", "/v1/no-such-route", "/no-such-file", "/admin", "/admin/users"];
+		for (const path of paths) {
+			const res = await get(path);
+			const html = (res.headers.get("content-type") ?? "").startsWith("text/html");
+			const h = (n: string) => res.headers.get(n);
+			expect([path, h("strict-transport-security"), h("x-content-type-options"), h("referrer-policy")]).toEqual([path, "max-age=63072000; includeSubDomains", "nosniff", "no-referrer"]);
+			if (html) expect([path, h("content-security-policy")?.startsWith("default-src 'none'")]).toEqual([path, true]);
+		}
+	});
+});

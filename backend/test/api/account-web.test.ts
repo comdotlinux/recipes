@@ -20,10 +20,15 @@ const signInWith = async (provider: "apple" | "google", sub: string) => {
 	expect(res.status).toBe(200);
 	return (await res.json()) as { token: string; userId: string };
 };
-const deleteWeb = async (provider: "apple" | "google", sub: string, extra: Record<string, unknown> = {}) => {
+const WEB_AUD = { google: GOOGLE_WEB, apple: APPLE_WEB } as const;
+const deleteWeb = async (provider: "apple" | "google", sub: string, extra: Record<string, unknown> = {}, aud: string = WEB_AUD[provider]) => {
 	const n = await nonce();
-	return call("/account/delete-web", { method: "POST", ...json({ provider, idToken: await providerToken(provider, n, { sub }), nonce: n, turnstileToken: TURNSTILE_OK, ...extra }) });
+	return call("/account/delete-web", { method: "POST", ...json({ provider, idToken: await providerToken(provider, n, { sub, aud }), nonce: n, turnstileToken: TURNSTILE_OK, ...extra }) });
 };
+const testEnv = env as unknown as Record<string, string | undefined>;
+const WEB_VARS = ["GOOGLE_WEB_CLIENT_ID", "APPLE_WEB_SERVICES_ID", "GOOGLE_AUDIENCES", "APPLE_AUDIENCES"] as const;
+const saved = Object.fromEntries(WEB_VARS.map((k) => [k, testEnv[k]]));
+const configure = () => Object.assign(testEnv, Object.fromEntries(WEB_VARS.map((k) => [k, (configured as unknown as Record<string, string>)[k]])));
 const tableCount = (userId: string) => inObject(userId, (_i, st) => st.storage.sql.exec("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name NOT GLOB '_cf_*'").one().n);
 
 describe("GET /account/delete (AC29)", () => {
@@ -57,7 +62,34 @@ describe("GET /account/delete (AC29)", () => {
 	});
 });
 
+describe("POST /account/delete-web without configuration", () => {
+	it("answers 404 while the page is not configured", async () => {
+		expect((await deleteWeb("google", "unconfigured")).status).toBe(404);
+	});
+});
+
 describe("POST /account/delete-web (AC29)", () => {
+	beforeEach(configure);
+	afterEach(() => Object.assign(testEnv, saved));
+
+	it("refuses a token issued to the app's client id", async () => {
+		await signInWith("google", "app-aud");
+		const res = await deleteWeb("google", "app-aud", {}, "local.test.google");
+		expect(res.status).toBe(401);
+		expect(((await res.json()) as { error: { code: string } }).error.code).toBe("invalid_token");
+	});
+
+	it("a replayed nonce is refused and the account stays", async () => {
+		const s = await signInWith("google", "replay-1");
+		const n = await nonce();
+		// The same nonce already used once by this account (for example by an earlier sign-in).
+		await inObject(s.userId, (_i, st) => void st.storage.sql.exec("INSERT INTO used_nonces (nonce_id, expires_at) VALUES (?, ?)", n.split(".")[0], Date.now() + 300_000));
+		const res = await call("/account/delete-web", { method: "POST", ...json({ provider: "google", idToken: await providerToken("google", n, { sub: "replay-1", aud: GOOGLE_WEB }), nonce: n, turnstileToken: TURNSTILE_OK }) });
+		expect(res.status).toBe(401);
+		expect(((await res.json()) as { error: { code: string } }).error.code).toBe("invalid_nonce");
+		expect((await call("/me", { token: s.token })).status).toBe(200);
+	});
+
 	it("the request fixture matches the contract shape", () => {
 		expect(Object.keys(requestFixture).sort()).toEqual(["appleAuthCode", "idToken", "nonce", "provider", "turnstileToken"]);
 	});
@@ -84,7 +116,7 @@ describe("POST /account/delete-web (AC29)", () => {
 		const res = await deleteWeb("google", "never-signed-up");
 		expect(res.status).toBe(404);
 		const n = await nonce();
-		const token = await providerToken("google", n, { sub: "never-signed-up" });
+		const token = await providerToken("google", n, { sub: "never-signed-up", aud: GOOGLE_WEB });
 		const probe = await call("/account/delete-web", { method: "POST", ...json({ provider: "google", idToken: token, nonce: n, turnstileToken: TURNSTILE_OK }) });
 		expect(probe.status).toBe(404);
 	});
@@ -92,7 +124,7 @@ describe("POST /account/delete-web (AC29)", () => {
 	it("rejects a bad token, a reused nonce and the test provider", async () => {
 		await signInWith("google", "web-3");
 		const n = await nonce();
-		const bad = await call("/account/delete-web", { method: "POST", ...json({ provider: "google", idToken: await providerToken("google", n, { sub: "web-3", wrongKey: true }), nonce: n, turnstileToken: TURNSTILE_OK }) });
+		const bad = await call("/account/delete-web", { method: "POST", ...json({ provider: "google", idToken: await providerToken("google", n, { sub: "web-3", wrongKey: true, aud: GOOGLE_WEB }), nonce: n, turnstileToken: TURNSTILE_OK }) });
 		expect(bad.status).toBe(401);
 		const test = await call("/account/delete-web", { method: "POST", ...json({ provider: "test", idToken: "__TEST_IDP__|web-3|x", nonce: n, turnstileToken: TURNSTILE_OK }) });
 		expect(test.status).toBe(400);
@@ -101,8 +133,8 @@ describe("POST /account/delete-web (AC29)", () => {
 	it("keeps the Apple code with the page's redirect URI for the deletion's revoke step", async () => {
 		const s = await signInWith("apple", "web-apple");
 		expect((await deleteWeb("apple", "web-apple", { appleAuthCode: "web-code" })).status).toBe(202);
-		const stored = await inObject(s.userId, (_i, st) => JSON.parse(st.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'apple_auth_code'").one().value));
-		expect(stored).toMatchObject({ code: "web-code", clientId: "local.test.apple", redirectUri: "http://localhost/account/delete" });
+		const stored = await inObject(s.userId, (_i, st) => JSON.parse(st.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'apple_auth_codes'").one().value));
+		expect(stored).toEqual({ [APPLE_WEB]: { code: "web-code", redirectUri: "http://localhost/account/delete", at: expect.any(Number) } });
 		expect(await tableCount(s.userId)).toBeGreaterThan(2);
 	});
 });

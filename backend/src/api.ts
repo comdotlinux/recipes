@@ -19,7 +19,7 @@ import { ID_PATTERN, MAX_RECIPE_BYTES, RecipeInput, isId } from "./recipes";
 import { SHARE_ID, openShareToken } from "./share";
 import { type AppleCode, type UserDO, userNamespace } from "./user-do";
 import { DELETE_PAGE, deletePageConfig, deletePageCsp, deletePageHtml } from "./account-page";
-import { HSTS, pageHeaders } from "./web";
+import { pageHeaders } from "./web";
 import { LEGAL_CSP, LEGAL_PAGES, legalHtml } from "./legal";
 
 export type TestProvider = (idToken: string, nonce: string) => Promise<{ sub: string } | null>;
@@ -172,14 +172,6 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 
 	const ids = (c: C, ...names: string[]) => names.every((n) => isId(c.req.param(n) ?? ""));
 
-	// Every answer of the app host, API and static files alike, carries HSTS and nosniff (plan 4.8 "Edge").
-	app.use("*", async (c, next) => {
-		await next();
-		c.res = new Response(c.res.body, c.res);
-		c.res.headers.set("strict-transport-security", HSTS);
-		c.res.headers.set("x-content-type-options", "nosniff");
-	});
-
 	app.get("/v1/health", (c) => c.json({ status: "ok", version: 1 }));
 
 	// docs/api.md "Turnstile page": the widget with this environment's site key; /turnstile.js hands the token to the app.
@@ -258,7 +250,7 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 		p: { provider: string; idToken: string; nonce: string; turnstileToken: string; appleAuthCode?: string },
 		rejected: Rejected,
 		redirectUri?: string,
-	): Promise<{ userId: string; nonce: { id: string; expiresAt: number }; apple?: AppleCode } | Response> => {
+	): Promise<{ userId: string; nonce: { id: string; expiresAt: number }; aud?: string; apple?: AppleCode } | Response> => {
 		if (!(await verifyTurnstile(p.turnstileToken, c.req.header("cf-connecting-ip") ?? null, c.env))) return rejected(401, "invalid_turnstile");
 		const now = Date.now();
 		const nonce = await verifyNonce(p.nonce, c.env, now);
@@ -275,7 +267,7 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 		// The code is exchanged later for the refresh token that account deletion revokes (plan 4.7).
 		const clientId = (subject as { aud?: string }).aud;
 		const apple = p.provider === "apple" && p.appleAuthCode && clientId ? { code: p.appleAuthCode, clientId, ...(redirectUri ? { redirectUri } : {}) } : undefined;
-		return { userId, nonce, apple };
+		return { userId, nonce, aud: clientId, apple };
 	};
 
 	app.post("/v1/session", async (c) => {
@@ -319,12 +311,16 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 
 	app.post("/v1/account/delete-web", async (c) => {
 		if (await limitedByIp(c, "delete-web")) return fail(c, 429, "rate_limited", "too many requests");
+		// Live only together with its page, and only for the web client ids: an app token cannot delete from here.
+		const config = deletePageConfig(c.env);
+		if (!config) return fail(c, 404, "not_found", "web deletion is not configured");
 		const rejected = rejecter(c, "web deletion");
 		const parsed = await identityBody(c, WebDeletionRequest, rejected);
 		if (parsed instanceof Response) return parsed;
 		// The page's Sign in with Apple request carried this redirect URI, so the code exchange must name it too.
 		const proof = await prove(c, parsed, rejected, `${new URL(c.req.url).origin}${DELETE_PAGE}`);
 		if (proof instanceof Response) return proof;
+		if (!proof.aud || (proof.aud !== config.google && proof.aud !== config.apple)) return rejected(401, "invalid_token");
 		return reply(c, await userObject(c.env, proof.userId).deleteAccountWeb({ nonceId: proof.nonce.id, nonceExpiresAt: proof.nonce.expiresAt, apple: proof.apple }));
 	});
 

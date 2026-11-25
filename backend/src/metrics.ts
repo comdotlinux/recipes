@@ -50,11 +50,17 @@ export type SystemEvent =
 	| { event: "share_report"; reason: string; reference: string }
 	| { event: "internal_error"; reason: string }
 	// A scheduled re-read (daily or stale) found a different active state: a webhook that should have set it was missed.
-	| { event: "entitlement_mismatch"; trigger: string };
+	| { event: "entitlement_mismatch"; trigger: string }
+	// A third-party deletion step (revenuecat, apple) still failing after 7 days; the erasure ran without it.
+	| { event: "account_deletion"; outcome: "third_party_abandoned"; step: string };
 
 export function systemEvent(env: Env, e: SystemEvent): void {
 	if (e.event === "share_report") {
 		env.METRICS.writeDataPoint({ blobs: [e.event, e.reason, e.reference], doubles: [1] });
+		return;
+	}
+	if (e.event === "account_deletion") {
+		env.METRICS.writeDataPoint({ blobs: [e.event, e.outcome, e.step], doubles: [1] });
 		return;
 	}
 	const detail = e.event === "auth_failure" || e.event === "internal_error" ? e.reason : e.event === "rate_limited" ? e.route : e.event === "billing_webhook" ? e.type : e.event === "entitlement_mismatch" ? e.trigger : e.provider;

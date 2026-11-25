@@ -51,6 +51,8 @@ describe("alert thresholds (plan 4.10, AC32)", () => {
 		["webhook failure streak of 5", [row("entitlement_refresh", "webhook", "gave_up", 3), row("auth_failure", "webhook_unauthorized", null, 2)], /Webhook failures: 5/],
 		["any entitlement mismatch", [row("entitlement_mismatch", "daily", null, 1)], /Entitlement mismatches: 1/],
 		["an erasure refused outside deletion", [row("internal_error", "erase_refused", null, 1)], /Internal errors/],
+		["deletion step retries in the last hour", [row("account_deletion", "step_retry", null, 2)], /Account deletion step retries: 2/],
+		["an abandoned third-party deletion step", [row("account_deletion", "third_party_abandoned", "apple", 1)], /abandoned after 7 days: 1/],
 	])("posts when %s", async (_label, fixture, expected) => {
 		rows = fixture;
 		const lines = await checkAndAlert(cronEnv);

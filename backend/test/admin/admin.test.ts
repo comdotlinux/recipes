@@ -199,6 +199,7 @@ describe("admin pages (AC42)", () => {
 		expect((await post("SUSPEND", "made_up")).status).toBe(400);
 		const res = await post("SUSPEND");
 		expect(res.status).toBe(303);
+		expect([res.headers.get("strict-transport-security"), res.headers.get("x-content-type-options")]).toEqual(["max-age=63072000; includeSubDomains", "nosniff"]);
 		expect(res.headers.get("location")).toBe(`/admin/user?id=${encodeURIComponent(s.userId)}`);
 		expect((await call("/me/consent", { method: "DELETE", token: s.token })).status).toBe(403);
 		expect((await post("UNSUSPEND", "none")).status).toBe(303);

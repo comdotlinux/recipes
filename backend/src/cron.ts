@@ -36,6 +36,9 @@ export function alerts(rows: MetricRow[], healthOk: boolean): string[] {
 	if (o.entitlementMismatches > 0) out.push(`Entitlement mismatches: ${o.entitlementMismatches} in the last hour`);
 	const refused = rows.filter((r) => r.event === "internal_error").reduce((n, r) => n + Number(r.n), 0);
 	if (refused > 0) out.push(`Internal errors (for example an erasure refused outside deletion): ${refused} in the last hour`);
+	const deletion = (outcome: string) => rows.filter((r) => r.event === "account_deletion" && r.a === outcome).reduce((n, r) => n + Number(r.n), 0);
+	if (deletion("step_retry") > 0) out.push(`Account deletion step retries: ${deletion("step_retry")} in the last hour (RevenueCat or Apple not reachable or refusing)`);
+	if (deletion("third_party_abandoned") > 0) out.push(`Account deletion steps abandoned after 7 days: ${deletion("third_party_abandoned")} in the last hour`);
 	if (!healthOk) out.push("Health check failed: GET /v1/health did not answer ok");
 	return out;
 }

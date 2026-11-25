@@ -52,7 +52,9 @@ export const REFRESH_TASK_TRIES = 10;
  */
 export const TOMBSTONE_TTL_MS = 365 * DAY_MS;
 /** Meta keys a tombstone keeps; everything else is erased. */
-export const TOMBSTONE_KEYS = ["state", "tombstone_until", "free_import_used_at", "free_import_refunds"] as const;
+export const TOMBSTONE_KEYS = ["state", "tombstone_until", "free_import_used_at", "free_import_refunds", "suspension_reason", "month_usage"] as const;
+/** Third-party deletion steps are retried this long; then the erasure runs anyway, so the user's data never waits on them. */
+export const THIRD_PARTY_DEADLINE_MS = 7 * DAY_MS;
 /** An Apple authorization code is valid for 5 minutes; an older one is not exchanged any more. */
 export const APPLE_CODE_TTL_MS = 5 * 60 * 1000;
 /** External deletion steps, each retried until done (plan 4.7); the erasure runs once all are done. */
@@ -106,6 +108,12 @@ function sharedText(json: string) {
 
 const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const INTERNAL = error(500, "internal_error", "object without a user id");
+/**
+ * Answer of an operation whose account started deletion (or was erased) during one of its awaits: nothing more is
+ * written, so a late request leaves only the plain tombstone or empty storage (AC28). Every write after an await in an
+ * operation is preceded by this check in the same synchronous step.
+ */
+const GONE = error(401, "unauthenticated", "the account is being deleted");
 
 /** One instance per user, named by the user id. The only stateful component. */
 export class UserDO extends DurableObject<Env> {
@@ -261,7 +269,14 @@ export class UserDO extends DurableObject<Env> {
 			// (no second free import, AC18), its wipe is cancelled, and the metrics id is new so old rows stay unlinkable.
 			this.sql.exec("DELETE FROM meta WHERE key = 'tombstone_until'");
 			this.sql.exec("DELETE FROM tasks WHERE kind = 'tombstone_expiry'");
-			this.setMeta("state", "active");
+			// Deleting and returning neither lifts a suspension nor resets this month's quota.
+			const usage = this.meta("month_usage");
+			if (usage !== null) {
+				const { period, count } = JSON.parse(usage) as { period: string; count: number };
+				if (period === month(now)) this.sql.exec("INSERT INTO usage (period, count) VALUES (?, ?) ON CONFLICT (period) DO UPDATE SET count = max(count, excluded.count)", period, count);
+				this.sql.exec("DELETE FROM meta WHERE key = 'month_usage'");
+			}
+			this.setMeta("state", this.meta("suspension_reason") === null ? "active" : "suspended");
 			this.setMeta("metrics_id", crypto.randomUUID());
 			this.setMeta("created_at", String(now));
 			this.event({ event: "account_created" });
@@ -395,6 +410,7 @@ export class UserDO extends DurableObject<Env> {
 		return this.run("images", secretHash, async (now) => {
 			// Before the checks below: they and the insert must run without an await in between.
 			const subscribed = await this.entitledNow(now);
+			if (!this.live()) return GONE;
 			if (!this.sql.exec("SELECT 1 FROM recipes WHERE id = ? AND deleted = 0", recipeId).toArray().length) return error(404, "not_found", "recipe not found");
 			const owner = this.sql.exec<{ recipe_id: string }>("SELECT recipe_id FROM images WHERE id = ?", imageId).toArray()[0];
 			if (owner && owner.recipe_id !== recipeId) return error(404, "not_found", "image belongs to another recipe");
@@ -512,6 +528,7 @@ export class UserDO extends DurableObject<Env> {
 		return this.run("imports", secretHash, async (now) => {
 			// The only await: everything below, from the idempotency check to the insert, runs in one synchronous step.
 			const subscribed = await this.entitledNow(now);
+			if (!this.live()) return GONE;
 			const existing = this.job(jobKey);
 			if (existing) return { ...this.jobView(existing), status: 202 };
 			if (this.consentVersion() !== AI_NOTICE_VERSION) return error(403, "consent_required", "accept the AI notice first");
@@ -556,6 +573,7 @@ export class UserDO extends DurableObject<Env> {
 		return this.run("translations", secretHash, async (now) => {
 			// The only await: everything below, from the idempotency check to the insert, runs in one synchronous step.
 			const subscribed = await this.entitledNow(now);
+			if (!this.live()) return GONE;
 			const existing = this.job(jobKey);
 			if (existing) return { ...this.jobView(existing), status: 202 };
 			const recipe = this.sql.exec<{ json: string }>("SELECT json FROM recipes WHERE id = ? AND deleted = 0", recipeId).toArray()[0];
@@ -707,6 +725,8 @@ export class UserDO extends DurableObject<Env> {
 			}
 			throw e;
 		}
+		// Deletion may have started while the model ran: the erasure takes it from here.
+		if (!this.live()) return;
 		// The job may have timed out while the model was running; the first outcome wins.
 		const current = this.job(jobKey);
 		if (current && OPEN.includes(current.status)) this.finish(current, outcome, Date.now());
@@ -738,6 +758,7 @@ export class UserDO extends DurableObject<Env> {
 			const owner = this.selfId();
 			if (!owner) return INTERNAL;
 			const subscribed = await this.entitledNow(now);
+			if (!this.live()) return GONE;
 			if (!this.liveRecipe(recipeId)) return error(404, "not_found", "recipe not found");
 			if (!subscribed) {
 				this.event({ event: "share", outcome: "subscription_required" });
@@ -749,6 +770,7 @@ export class UserDO extends DurableObject<Env> {
 			}
 			const screened = await this.screenPictures(recipeId, now);
 			if (screened) return screened;
+			if (!this.live()) return GONE;
 			// Checked again after the awaits above; from here on everything runs in one step.
 			if (!this.liveRecipe(recipeId)) return error(404, "not_found", "recipe not found");
 			if (this.sharesToday(now) >= SHARES_PER_DAY) return error(429, "share_limit", `at most ${SHARES_PER_DAY} new links a day`);
@@ -788,6 +810,7 @@ export class UserDO extends DurableObject<Env> {
 				systemEvent(this.env, { event: "rate_limited", route: "screen-image" });
 				return error(429, "rate_limited", "picture checks are busy; try again later");
 			}
+			if (!this.live()) return GONE;
 			let safe: boolean;
 			try {
 				safe = await screenImage(this.models(), () => this.consentVersion(), image.bytes, image.mime);
@@ -796,6 +819,7 @@ export class UserDO extends DurableObject<Env> {
 				this.event({ event: "screen", outcome: "unavailable" });
 				return error(503, "screening_unavailable", "the picture check is not available; try again later");
 			}
+			if (!this.live()) return GONE;
 			// Only for the bytes that were checked: a picture replaced meanwhile stays unchecked.
 			this.sql.exec("UPDATE images SET screened_ok = ? WHERE id = ? AND bytes = ?", safe ? 1 : 0, id, image.bytes);
 			this.event({ event: "screen", outcome: safe ? "safe" : "not_safe" });
@@ -919,11 +943,13 @@ export class UserDO extends DurableObject<Env> {
 			}
 			if (this.recipeBytes() >= RECIPE_STORAGE_CAP) return error(413, "recipe_storage_cap", "stored recipe text is at 20 MB");
 			const subscribed = await this.entitledNow(now);
+			if (!this.live()) return GONE;
 			const reserved = await this.owner(ownerId).reserveAccept(shareId, await sha256Hex(me));
 			if (reserved.status !== 200) return reserved;
 			const { recipe, images } = reserved.body as { recipe: string; images: SharedImage[] };
 			const imageIds = await Promise.all(images.map((i) => derivedId(`${copyId}:${i.id}`)));
 			// No await below: the checks and every write form one step, so a copy is never partial.
+			if (!this.live()) return GONE;
 			const raced = this.liveRecipe(copyId);
 			if (raced) return { status: 200, body: this.recipeViews([raced])[0] };
 			const copy = RecipeInput.safeParse({ id: copyId, ...sharedText(recipe), sourceUrl: null, sourceType: "shared", imageIds });
@@ -968,6 +994,7 @@ export class UserDO extends DurableObject<Env> {
 			if (ownerId === me) return error(409, "own_share", "this is your own link");
 			const revoked = await this.owner(ownerId).revokeShare(shareId);
 			if (revoked.status !== 204) return revoked;
+			if (!this.live()) return GONE;
 			// One report per share and reporter; a repeat changes nothing.
 			if (!this.sql.exec("SELECT 1 FROM reports WHERE job_key = ? AND kind = 'share'", shareId).toArray().length) {
 				this.sql.exec("INSERT INTO reports (at, kind, job_key, reason, note) VALUES (?, 'share', ?, ?, ?)", now, shareId, reason, note);
@@ -1021,6 +1048,7 @@ export class UserDO extends DurableObject<Env> {
 				systemEvent(this.env, { event: "rate_limited", route: "pdf" });
 				return error(429, "rate_limited", "PDF rendering is busy; try again later");
 			}
+			if (!this.live()) return GONE;
 			// Counted as both before the render, so parallel requests cannot pass either limit; the outcome then takes one back.
 			if (limited()) return error(429, "pdf_limit", `at most ${PDF_PER_DAY} PDFs a day`);
 			this.bump(now, "pdf_rendered", 1);
@@ -1030,6 +1058,7 @@ export class UserDO extends DurableObject<Env> {
 				this.sql.exec<{ mime: string; bytes: ArrayBuffer }>("SELECT mime, bytes FROM images WHERE id = ? AND recipe_id = ?", id, recipeId).toArray(),
 			);
 			const bytes = await renderPdf(browser, pdfHtml(recipe, pictures));
+			if (!this.live()) return GONE;
 			if (!bytes) {
 				this.bump(now, "pdf_rendered", -1);
 				this.event({ event: "pdf", outcome: "unavailable" });
@@ -1208,7 +1237,7 @@ export class UserDO extends DurableObject<Env> {
 
 	/** Keeps an Apple authorization code until it is exchanged for the refresh token that deletion revokes. */
 	private async keepAppleCode(apple: AppleCode, now: number): Promise<void> {
-		this.setMeta("apple_auth_code", JSON.stringify({ ...apple, at: now }));
+		this.addAppleCode(apple, now);
 		await schedule(this.ctx.storage, { id: "apple_token", kind: "apple_token", dueAt: now });
 	}
 
@@ -1216,15 +1245,35 @@ export class UserDO extends DurableObject<Env> {
 	 * Exchanges a stored authorization code for a refresh token. True when nothing is left to do (exchanged, refused for
 	 * good, or older than 5 minutes, which leaves nothing to revoke); false when Apple or the key was unavailable.
 	 */
+	/** Codes and refresh tokens are kept per client id: the app (bundle id) and the web page (Services ID) each get their own. */
+	private appleMap<T>(key: "apple_auth_codes" | "apple_refresh_tokens"): Record<string, T> {
+		return JSON.parse(this.meta(key) ?? "{}") as Record<string, T>;
+	}
+
+	private setAppleMap(key: "apple_auth_codes" | "apple_refresh_tokens", value: Record<string, unknown>): void {
+		if (Object.keys(value).length === 0) this.sql.exec("DELETE FROM meta WHERE key = ?", key);
+		else this.setMeta(key, JSON.stringify(value));
+	}
+
+	private addAppleCode(apple: AppleCode, now: number): void {
+		this.setAppleMap("apple_auth_codes", { ...this.appleMap("apple_auth_codes"), [apple.clientId]: { code: apple.code, redirectUri: apple.redirectUri, at: now } });
+	}
+
 	private async exchangeStoredAppleCode(now: number): Promise<boolean> {
-		const raw = this.meta("apple_auth_code");
-		if (raw === null) return true;
-		const { code, clientId, redirectUri, at } = JSON.parse(raw) as AppleCode & { at: number };
-		const token = now - at < APPLE_CODE_TTL_MS ? await exchangeAppleCode(this.env, clientId, code, now, redirectUri) : "invalid";
-		if (token === null) return false;
-		this.sql.exec("DELETE FROM meta WHERE key = 'apple_auth_code'");
-		if (token !== "invalid") this.setMeta("apple_refresh_token", JSON.stringify({ token, clientId }));
-		return true;
+		let done = true;
+		for (const [clientId, { code, redirectUri, at }] of Object.entries(this.appleMap<{ code: string; redirectUri?: string; at: number }>("apple_auth_codes"))) {
+			const token = now - at < APPLE_CODE_TTL_MS ? await exchangeAppleCode(this.env, clientId, code, now, redirectUri) : "invalid";
+			if (token === null) {
+				done = false;
+				continue;
+			}
+			// Re-read after the await: another sign-in may have added a code or token meanwhile.
+			const codes = this.appleMap("apple_auth_codes");
+			delete codes[clientId];
+			this.setAppleMap("apple_auth_codes", codes);
+			if (token !== "invalid") this.setAppleMap("apple_refresh_tokens", { ...this.appleMap("apple_refresh_tokens"), [clientId]: token });
+		}
+		return done;
 	}
 
 	/** Alarm task after a sign-in with Apple; retried with backoff until the code is exchanged or has expired. */
@@ -1248,10 +1297,11 @@ export class UserDO extends DurableObject<Env> {
 		const now = Date.now();
 		if (accountState(this.sql) === "deleting") return { status: 202, body: { state: "deleting" } };
 		if (!this.live()) return error(404, "no_account", "no account for this sign-in");
-		const used = this.sql.exec("INSERT INTO used_nonces (nonce_id, expires_at) VALUES (?, ?) ON CONFLICT DO NOTHING", a.nonceId, a.nonceExpiresAt);
-		if (used.rowsWritten === 0) return error(401, "invalid_nonce", "nonce already used");
-		// The apple step of the deletion exchanges this code and revokes the token it yields.
-		if (a.apple) this.setMeta("apple_auth_code", JSON.stringify({ ...a.apple, at: now }));
+		// A SELECT, not rowsWritten: the nonce must be single use whatever the driver reports for ON CONFLICT DO NOTHING.
+		if (this.sql.exec("SELECT 1 FROM used_nonces WHERE nonce_id = ?", a.nonceId).toArray().length) return error(401, "invalid_nonce", "nonce already used");
+		this.sql.exec("INSERT INTO used_nonces (nonce_id, expires_at) VALUES (?, ?)", a.nonceId, a.nonceExpiresAt);
+		// The apple step of the deletion exchanges this code and revokes the token it yields, next to any token of the app.
+		if (a.apple) this.addAppleCode(a.apple, now);
 		await this.startDeletion(now);
 		return { status: 202, body: { state: "deleting" } };
 	}
@@ -1271,12 +1321,19 @@ export class UserDO extends DurableObject<Env> {
 		await armAlarm(this.ctx.storage);
 	}
 
+	/** Revokes every stored Apple refresh token (one per client id); a revoked one is forgotten at once. */
 	private async revokeApple(now: number): Promise<boolean> {
-		if (!(await this.exchangeStoredAppleCode(now))) return false;
-		const raw = this.meta("apple_refresh_token");
-		if (raw === null) return true;
-		const { token, clientId } = JSON.parse(raw) as { token: string; clientId: string };
-		return revokeAppleToken(this.env, clientId, token, now);
+		let done = await this.exchangeStoredAppleCode(now);
+		for (const [clientId, token] of Object.entries(this.appleMap<string>("apple_refresh_tokens"))) {
+			if (!(await revokeAppleToken(this.env, clientId, token, now))) {
+				done = false;
+				continue;
+			}
+			const tokens = this.appleMap("apple_refresh_tokens");
+			delete tokens[clientId];
+			this.setAppleMap("apple_refresh_tokens", tokens);
+		}
+		return done;
 	}
 
 	/**
@@ -1291,10 +1348,13 @@ export class UserDO extends DurableObject<Env> {
 			revenuecat: () => deleteCustomer(this.env, userId),
 			apple: () => this.revokeApple(now),
 		};
+		// After THIRD_PARTY_DEADLINE_MS a step that still fails is abandoned with a metric; the erasure does not wait.
+		const overdue = now - Number(this.meta("deletion_started_at") ?? now) >= THIRD_PARTY_DEADLINE_MS;
 		let pending = 0;
 		for (const step of DELETION_STEPS) {
 			if (this.meta(`deletion_done_${step}`) !== null) continue;
 			if (await steps[step]()) this.setMeta(`deletion_done_${step}`, String(now));
+			else if (overdue) systemEvent(this.env, { event: "account_deletion", outcome: "third_party_abandoned", step });
 			else pending++;
 		}
 		if (pending > 0) {
@@ -1320,7 +1380,10 @@ export class UserDO extends DurableObject<Env> {
 		}
 		const usedAt = this.meta("free_import_used_at");
 		const refunds = this.meta("free_import_refunds");
-		if (expired || (usedAt === null && Number(refunds ?? "0") === 0)) {
+		const suspension = expired ? null : this.meta("suspension_reason");
+		const used = expired ? 0 : this.monthUsed(now);
+		// A tombstone is kept when it prevents something: a second free import, escaping a suspension, a fresh monthly quota.
+		if (expired || (usedAt === null && Number(refunds ?? "0") === 0 && suspension === null && used === 0)) {
 			await this.ctx.storage.deleteAll();
 			// deleteAll() also clears the alarm at this compatibility date (spike S11); explicit anyway.
 			await this.ctx.storage.deleteAlarm();
@@ -1334,6 +1397,8 @@ export class UserDO extends DurableObject<Env> {
 			this.setMeta("tombstone_until", String(until));
 			if (usedAt !== null) this.setMeta("free_import_used_at", usedAt);
 			if (refunds !== null) this.setMeta("free_import_refunds", refunds);
+			if (suspension !== null) this.setMeta("suspension_reason", suspension);
+			if (used > 0) this.setMeta("month_usage", JSON.stringify({ period: month(now), count: used }));
 			this.sql.exec("INSERT INTO tasks (id, kind, due_at, attempts, payload) VALUES ('tombstone_expiry', 'tombstone_expiry', ?, 0, NULL)", until);
 		});
 		await armAlarm(this.ctx.storage);
