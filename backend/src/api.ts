@@ -80,6 +80,7 @@ type UserObject = Pick<
 	| "startTranslation"
 	| "createShare"
 	| "deleteShare"
+	| "listShares"
 	| "previewShare"
 	| "acceptShare"
 	| "reportShare"
@@ -434,6 +435,11 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 			const body = result.body as { token: string };
 			return { ...result, body: { ...body, url: `${new URL(c.req.url).origin}/s#${body.token}` } };
 		}),
+	);
+
+	app.get(
+		"/v1/shares",
+		authed((o, a) => o.listShares(a.secretHash)),
 	);
 
 	app.delete(
