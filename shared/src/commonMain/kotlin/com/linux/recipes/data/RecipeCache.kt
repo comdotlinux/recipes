@@ -10,12 +10,13 @@ import kotlinx.serialization.builtins.ListSerializer
 
 /**
  * Offline copy of the user's data under [root] (a directory inside the app's files directory):
- * `recipes.json`, `settings.json` (sync cursor) and `images/<imageId>`.
+ * `recipes.json`, `settings.json` (sync cursor, open import job) and `images/<imageId>`.
  * Every file is written to a temporary name first and then renamed, so a crash never leaves half a file.
  */
 class RecipeCache(private val root: Path, private val fs: FileSystem = SystemFileSystem) {
+    /** [importJobId] and [importJobKind]: the open import job, kept so it survives an app restart. */
     @Serializable
-    data class Settings(val cursor: Long = 0)
+    data class Settings(val cursor: Long = 0, val importJobId: String? = null, val importJobKind: String? = null)
 
     private val recipesFile = Path(root, "recipes.json")
     private val settingsFile = Path(root, "settings.json")
@@ -28,8 +29,16 @@ class RecipeCache(private val root: Path, private val fs: FileSystem = SystemFil
         writeAtomic(recipesFile, json.encodeToString(ListSerializer(Recipe.serializer()), recipes).encodeToByteArray())
 
     /** The cursor is only trusted when the recipes it belongs to can be read; otherwise sync starts from 0. */
-    fun readSettings(): Settings =
-        if (read(recipesFile, ListSerializer(Recipe.serializer())) == null) Settings() else read(settingsFile, Settings.serializer()) ?: Settings()
+    fun readSettings(): Settings {
+        val stored = read(settingsFile, Settings.serializer()) ?: Settings()
+        return if (read(recipesFile, ListSerializer(Recipe.serializer())) == null) stored.copy(cursor = 0) else stored
+    }
+
+    /**
+     * Read, change, write. Callers run on the main dispatcher and this never suspends, so the recipe sync and the
+     * import repository cannot overwrite each other's fields.
+     */
+    fun updateSettings(change: (Settings) -> Settings) = writeSettings(change(readSettings()))
 
     fun writeSettings(settings: Settings) =
         writeAtomic(settingsFile, json.encodeToString(Settings.serializer(), settings).encodeToByteArray())
