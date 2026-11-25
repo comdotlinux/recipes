@@ -13,6 +13,7 @@ import {
 import { type Result, error, toResponse } from "./http";
 import { MAX_TEXT_CHARS, validateUrl } from "./ai/fetch-url";
 import { ALLOWED_MIME, MAX_IMAGE_BYTES, sniffImage } from "./images";
+import { TRANSLATION_LANGUAGES } from "./ai/translate";
 import { systemEvent } from "./metrics";
 import { ID_PATTERN, MAX_RECIPE_BYTES, RecipeInput, isId } from "./recipes";
 import type { UserDO } from "./user-do";
@@ -70,6 +71,7 @@ type UserObject = Pick<
 	| "clearConsent"
 	| "startImport"
 	| "getJob"
+	| "startTranslation"
 	| "report"
 	| "refreshFromClient"
 	| "entitlementChanged"
@@ -353,8 +355,23 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 		authed(async (o, a, c) => (ids(c, "id") ? o.getJob(a.secretHash, c.req.param("id")!) : error(400, "invalid_id", "id must be a lowercase UUID"))),
 	);
 
+	// docs/api.md "Milestone M4": a translation job, polled through GET /jobs/:id like an import.
+	app.post(
+		"/v1/recipes/:id/translations",
+		authed(async (o, a, c) => {
+			if (!ids(c, "id")) return error(400, "invalid_id", "id must be a lowercase UUID");
+			const key = c.req.header("idempotency-key") ?? "";
+			if (!isId(key)) return error(400, "invalid_id", "Idempotency-Key must be a lowercase UUID");
+			const body = await readJson(c, 1024);
+			if ("fail" in body) return body.fail;
+			const parsed = z.strictObject({ language: z.enum(TRANSLATION_LANGUAGES) }).safeParse(body.value);
+			if (!parsed.success) return error(400, "invalid_body", `send { language } with one of ${TRANSLATION_LANGUAGES.join(", ")}`);
+			return o.startTranslation(a.secretHash, key, c.req.param("id")!, parsed.data.language);
+		}),
+	);
+
 	const ReportBody = z.strictObject({
-		kind: z.literal("import_result"),
+		kind: z.enum(["import_result", "translation"]),
 		jobId: z.string().regex(ID_PATTERN),
 		reason: z.enum(["wrong_content", "offensive", "other"]),
 		note: z.string().max(1000).optional(),

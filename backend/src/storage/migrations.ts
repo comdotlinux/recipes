@@ -37,6 +37,12 @@ export const MIGRATIONS: Migration[] = [
 			"CREATE TABLE reports (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, kind TEXT NOT NULL, job_key TEXT, reason TEXT NOT NULL, note TEXT NOT NULL, UNIQUE (job_key, kind))",
 		);
 	},
+	// v4 (M4): one translation per recipe and language; stale once the source recipe's content changed
+	(sql) => {
+		sql.exec(
+			"CREATE TABLE translations (recipe_id TEXT NOT NULL, lang TEXT NOT NULL, stale INTEGER NOT NULL DEFAULT 0, json TEXT NOT NULL, PRIMARY KEY (recipe_id, lang))",
+		);
+	},
 ];
 
 // GLOB, not LIKE: "_" is a wildcard in LIKE. _cf_* tables are internal to the runtime.

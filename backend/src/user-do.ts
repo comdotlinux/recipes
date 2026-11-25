@@ -2,13 +2,14 @@ import { DurableObject } from "cloudflare:workers";
 import { type Result, error } from "./http";
 import { FREE_CAP_BYTES, SUBSCRIBER_CAP_BYTES } from "./images";
 import { userEvent } from "./metrics";
-import { MAX_IMAGES_PER_RECIPE, MAX_RECIPES, type RecipeInput, isoTime, toRecipe } from "./recipes";
+import { MAX_IMAGES_PER_RECIPE, MAX_RECIPES, type RecipeInput, type TranslationView, isoTime, toRecipe } from "./recipes";
 import { migrate, rowCounts, schemaVersion } from "./storage/migrations";
 import { armAlarm, runDueTasks, schedule } from "./storage/tasks";
 import { fetchPage } from "./ai/fetch-url";
 import { AI_NOTICE_VERSION, ConsentRequired, type ModelRunner } from "./ai/gateway";
 import { type ImportOutcome, structureRecipe } from "./ai/structure";
 import { transcribePhoto } from "./ai/transcribe";
+import { type TranslateOutcome, type TranslationLanguage, translateRecipe } from "./ai/translate";
 import { type Entitlement, type EntitlementSource, NONE, endOf, revenueCat } from "./billing/revenuecat";
 
 export const DAY_MS = 86_400_000;
@@ -140,6 +141,20 @@ export class UserDO extends DurableObject<Env> {
 		return subscribed ? SUBSCRIBER_CAP_BYTES : FREE_CAP_BYTES;
 	}
 
+	/** Recipes in the contract shape, each with its stored translations. */
+	private recipeViews(rows: RecipeRow[]) {
+		const byRecipe = new Map<string, TranslationView[]>();
+		for (const row of rows) {
+			if (row.deleted) continue;
+			const variants = this.sql
+				.exec<{ lang: string; stale: number; json: string }>("SELECT lang, stale, json FROM translations WHERE recipe_id = ? ORDER BY lang", row.id)
+				.toArray()
+				.map((t) => ({ language: t.lang, stale: t.stale === 1, ...JSON.parse(t.json) }));
+			byRecipe.set(row.id, variants);
+		}
+		return rows.map((row) => toRecipe(row, byRecipe.get(row.id)));
+	}
+
 	private usedBytes(exceptImageId = ""): number {
 		return this.sql.exec<{ n: number }>("SELECT coalesce(sum(size), 0) AS n FROM images WHERE id != ?", exceptImageId).one().n;
 	}
@@ -220,7 +235,7 @@ export class UserDO extends DurableObject<Env> {
 			const more = rows.length > PAGE_SIZE;
 			const page = rows.slice(0, PAGE_SIZE);
 			const rev = more ? page[page.length - 1].rev : Number(this.meta("rev") ?? "0");
-			return { status: 200, body: { recipes: page.map(toRecipe), rev, more } };
+			return { status: 200, body: { recipes: this.recipeViews(page), rev, more } };
 		});
 	}
 
@@ -247,6 +262,8 @@ export class UserDO extends DurableObject<Env> {
 			const stored = new Set(this.sql.exec<{ id: string }>("SELECT id FROM images WHERE recipe_id = ?", input.id).toArray().map((r) => r.id));
 			if (input.imageIds.some((id) => !stored.has(id))) return error(400, "invalid_body", "imageIds lists an image not uploaded to this recipe");
 			for (const id of stored) if (!input.imageIds.includes(id)) this.sql.exec("DELETE FROM images WHERE id = ?", id);
+			// A content change makes every translation of this recipe stale (AC22); they stay until translated again.
+			if (live && existing.json !== json) this.sql.exec("UPDATE translations SET stale = 1 WHERE recipe_id = ?", input.id);
 			const rev = this.nextRev();
 			this.sql.exec(
 				"INSERT INTO recipes (id, rev, deleted, updated_at, json) VALUES (?, ?, 0, ?, ?) ON CONFLICT (id) DO UPDATE SET rev = excluded.rev, deleted = 0, updated_at = excluded.updated_at, json = excluded.json",
@@ -256,7 +273,7 @@ export class UserDO extends DurableObject<Env> {
 				json,
 			);
 			this.setMeta("recipe_bytes", String(total - oldSize + size));
-			return { status: 200, body: toRecipe({ id: input.id, rev, deleted: 0, updated_at: now, json }) };
+			return { status: 200, body: this.recipeViews([{ id: input.id, rev, deleted: 0, updated_at: now, json }])[0] };
 		}, true);
 	}
 
@@ -270,6 +287,7 @@ export class UserDO extends DurableObject<Env> {
 				this.sql.exec("UPDATE recipes SET rev = ?, deleted = 1, updated_at = ?, json = NULL WHERE id = ?", this.nextRev(), now, id);
 				this.setMeta("recipe_bytes", String(total - freed));
 				this.sql.exec("DELETE FROM images WHERE recipe_id = ?", id);
+				this.sql.exec("DELETE FROM translations WHERE recipe_id = ?", id);
 				await this.scheduleExpiry(now + MARKER_TTL_MS);
 			}
 			return { status: 204 };
@@ -343,9 +361,12 @@ export class UserDO extends DurableObject<Env> {
 		return this.sql.exec<{ count: number }>("SELECT count FROM usage WHERE period = ?", month(now)).toArray()[0]?.count ?? 0;
 	}
 
-	/** Charges one unit: the free lifetime unit first, then a monthly unit while subscribed. Null when none is left. */
-	private reserve(now: number, subscribed: boolean): { charge: "free" | "month"; period: string | null } | null {
-		if (this.meta("free_import_used_at") === null) {
+	/**
+	 * Charges one unit: the free lifetime unit first (imports only; a translation never takes it), then a monthly unit
+	 * while subscribed. Null when none is left.
+	 */
+	private reserve(now: number, subscribed: boolean, free = true): { charge: "free" | "month"; period: string | null } | null {
+		if (free && this.meta("free_import_used_at") === null) {
 			this.setMeta("free_import_used_at", String(now));
 			return { charge: "free", period: null };
 		}
@@ -377,6 +398,11 @@ export class UserDO extends DurableObject<Env> {
 	// ---- import jobs ----
 
 	private jobView(job: JobRow): Result {
+		if (job.kind === "translation") {
+			// result_json holds { recipeId, language } from the start; the translation itself lives with the recipe.
+			const target = JSON.parse(job.result_json!) as { recipeId: string; language: string };
+			return { status: 0, body: { id: job.job_key, kind: job.kind, status: job.status, createdAt: isoTime(job.created_at), draft: null, ...target } };
+		}
 		const kind = job.kind.replace("import_", "");
 		const draft = job.status === "done" && job.result_json ? JSON.parse(job.result_json) : null;
 		return { status: 0, body: { id: job.job_key, kind, status: job.status, createdAt: isoTime(job.created_at), draft } };
@@ -429,6 +455,47 @@ export class UserDO extends DurableObject<Env> {
 		});
 	}
 
+	/** POST /recipes/:id/translations: a job like an import, subscriber only, always a monthly unit (plan 4.5, 4.6). */
+	startTranslation(secretHash: string, jobKey: string, recipeId: string, language: TranslationLanguage): Promise<Result> {
+		return this.run("translations", secretHash, async (now) => {
+			// The only await: everything below, from the idempotency check to the insert, runs in one synchronous step.
+			const subscribed = await this.entitledNow(now);
+			const existing = this.job(jobKey);
+			if (existing) return { ...this.jobView(existing), status: 202 };
+			const recipe = this.sql.exec<{ json: string }>("SELECT json FROM recipes WHERE id = ? AND deleted = 0", recipeId).toArray()[0];
+			if (!recipe) return error(404, "not_found", "recipe not found");
+			if (this.consentVersion() !== AI_NOTICE_VERSION) return error(403, "consent_required", "accept the AI notice first");
+			if (!subscribed) {
+				this.event({ event: "quota_denied", reason: "subscription_required" });
+				return error(402, "subscription_required", "translation needs the subscription");
+			}
+			if (this.sql.exec("SELECT 1 FROM jobs WHERE status IN ('pending', 'running')").toArray().length) {
+				return error(409, "job_running", "another job is still running");
+			}
+			if (this.attemptsToday(now) >= ATTEMPTS_PER_DAY) {
+				this.event({ event: "quota_denied", reason: "attempt_limit" });
+				return error(429, "attempt_limit", "too many failed jobs today");
+			}
+			const unit = this.reserve(now, subscribed, false);
+			if (!unit) {
+				this.event({ event: "quota_denied", reason: "quota_exhausted" });
+				return error(402, "quota_exhausted", "no monthly unit left");
+			}
+			this.sql.exec(
+				"INSERT INTO jobs (job_key, kind, status, input, created_at, result_json, charge, period) VALUES (?, 'translation', 'pending', ?, ?, ?, ?, ?)",
+				jobKey,
+				JSON.stringify({ recipeId, language, source: recipe.json }),
+				now,
+				JSON.stringify({ recipeId, language }),
+				unit.charge,
+				unit.period,
+			);
+			await schedule(this.ctx.storage, { id: `job:${jobKey}`, kind: "job", dueAt: now, payload: jobKey });
+			await schedule(this.ctx.storage, { id: `job_timeout:${jobKey}`, kind: "job_timeout", dueAt: now + JOB_TIMEOUT_MS, payload: jobKey });
+			return { ...this.jobView(this.job(jobKey)!), status: 202 };
+		}, true);
+	}
+
 	report(secretHash: string, r: { kind: string; jobId: string; reason: string; note: string }): Promise<Result> {
 		return this.run("reports", secretHash, async (now) => {
 			if (!this.job(r.jobId)) return error(404, "not_found", "job not found");
@@ -448,10 +515,30 @@ export class UserDO extends DurableObject<Env> {
 	}
 
 	/** Ends a job in exactly one outcome, in one synchronous step: status, refund, attempt count, input removed. */
-	private finish(job: JobRow, outcome: ImportOutcome | { status: "failed" }, now: number): void {
-		const draft = outcome.status === "done" ? JSON.stringify((outcome as { draft: unknown }).draft) : null;
+	private finish(job: JobRow, result: ImportOutcome | TranslateOutcome | { status: "failed" }, now: number): void {
+		let outcome = result;
+		if (outcome.status === "done" && "translation" in outcome) {
+			const { recipeId, language, source } = JSON.parse(job.input!) as { recipeId: string; language: string; source: string };
+			const current = this.sql.exec<{ json: string }>("SELECT json FROM recipes WHERE id = ? AND deleted = 0", recipeId).toArray()[0];
+			if (!current) {
+				// Deleted while the job ran: nothing to attach the translation to.
+				outcome = { status: "failed" };
+			} else {
+				// Changed while the job ran: the translation is kept, already marked stale (AC22).
+				this.sql.exec(
+					"INSERT INTO translations (recipe_id, lang, stale, json) VALUES (?, ?, ?, ?) ON CONFLICT (recipe_id, lang) DO UPDATE SET stale = excluded.stale, json = excluded.json",
+					recipeId,
+					language,
+					current.json === source ? 0 : 1,
+					JSON.stringify(outcome.translation),
+				);
+				// A new revision, so the delta pull delivers the recipe with its translation.
+				this.sql.exec("UPDATE recipes SET rev = ?, updated_at = ? WHERE id = ?", this.nextRev(), now, recipeId);
+			}
+		}
+		const draft = outcome.status === "done" && "draft" in outcome ? JSON.stringify(outcome.draft) : null;
 		this.sql.exec(
-			"UPDATE jobs SET status = ?, result_json = ?, input = NULL, input_blob = NULL, ended_at = ? WHERE job_key = ?",
+			"UPDATE jobs SET status = ?, result_json = coalesce(?, result_json), input = NULL, input_blob = NULL, ended_at = ? WHERE job_key = ?",
 			outcome.status,
 			draft,
 			now,
@@ -472,10 +559,14 @@ export class UserDO extends DurableObject<Env> {
 		return this.env;
 	}
 
-	private async pipeline(job: JobRow): Promise<ImportOutcome> {
+	private async pipeline(job: JobRow): Promise<ImportOutcome | TranslateOutcome> {
 		// Read at every model call, so a withdrawal while the page is fetched stops the model call.
 		const consent = () => this.consentVersion();
 		const ai = this.models();
+		if (job.kind === "translation") {
+			const t = JSON.parse(job.input!) as { language: TranslationLanguage; source: string };
+			return translateRecipe(ai, consent, JSON.parse(t.source) as RecipeInput, t.language);
+		}
 		if (job.kind === "import_url") {
 			const page = await fetchPage(job.input!);
 			if (!page.ok) {
@@ -502,7 +593,7 @@ export class UserDO extends DurableObject<Env> {
 			return;
 		}
 		this.sql.exec("UPDATE jobs SET status = 'running' WHERE job_key = ?", jobKey);
-		let outcome: ImportOutcome;
+		let outcome: ImportOutcome | TranslateOutcome;
 		try {
 			outcome = await this.pipeline(job);
 		} catch (e) {

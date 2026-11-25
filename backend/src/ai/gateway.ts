@@ -37,7 +37,7 @@ export type ModelRunner = Pick<Ai, "run">;
 export async function runModel(
 	env: { AI?: ModelRunner },
 	consent: number | null | (() => number | null),
-	feature: "structure" | "transcribe",
+	feature: "structure" | "transcribe" | "translate" | "screen",
 	model: string,
 	inputs: Record<string, unknown>,
 ): Promise<unknown> {
@@ -52,6 +52,22 @@ export async function runModel(
 	} catch (e) {
 		if (GUARDRAIL_BLOCK.test(String(e))) throw new GuardrailBlock(String(e));
 		throw e;
+	}
+}
+
+/** One call on the primary model, then the fallback; a guardrail block is not retried and propagates. */
+export async function runWithFallback(
+	env: { AI?: ModelRunner },
+	consent: number | null | (() => number | null),
+	feature: "translate" | "screen",
+	models: { primary: string; fallback: string },
+	inputs: Record<string, unknown>,
+): Promise<unknown> {
+	try {
+		return await runModel(env, consent, feature, models.primary, inputs);
+	} catch (e) {
+		if (e instanceof GuardrailBlock) throw e;
+		return runModel(env, consent, feature, models.fallback, inputs);
 	}
 }
 

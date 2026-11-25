@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { RecipeInput } from "../recipes";
+import { RecipeInput, stripControls } from "../recipes";
 import { GuardrailBlock, type ModelRunner, answerObject, runModel } from "./gateway";
 import { STRUCTURE_MODELS } from "./models";
 
@@ -53,10 +53,7 @@ const ModelOutput = z.object({
 
 /** Plain text only: no HTML tags, no links (the draft is shown to the user and never interpreted). */
 export const clean = (s: string) =>
-	s
-		// C0 and C1 controls except tab and newline, bidirectional controls (a U+202E can make a title read backwards),
-		// zero-width space, line and paragraph separators and the byte-order mark.
-		.replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u061C\u200B\u200E\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069\uFEFF]/g, "")
+	stripControls(s)
 		.replace(/<[^>]*>/g, " ")
 		.replace(/\b(https?:\/\/|www\.)\S+/gi, " ")
 		.replace(/[ \t]+/g, " ")

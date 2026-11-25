@@ -176,7 +176,7 @@ The page calls whichever of the two exists. It loads script and frames only from
 ```jsonc
 // Report
 {
-  "kind": "import_result",        // later milestones add "translation" and "share"
+  "kind": "import_result",        // "import_result" | "translation" (M4); M5 adds "share" with its own body
   "jobId": "4c0e9a1b-7d2f-4e3a-9b8c-1f2e3d4c5b6a",
   "reason": "wrong_content",      // "wrong_content" | "offensive" | "other"
   "note": ""                      // 0..1000 characters, optional
@@ -238,6 +238,58 @@ Not called by the app. RevenueCat posts every subscription event to `POST /v1/we
 ### Local environment only
 
 `POST /v1/testing/entitlement` with the session token and `{ "active": true }` or `{ "active": false }` switches the signed-in user's subscription without RevenueCat (a 30-day subscription, or none) and answers like `POST /entitlement/refresh`. It exists only in the local entry, which has no RevenueCat key; see `backend/README.md`.
+
+## Milestone M4
+
+### Translations
+
+A subscriber can have a recipe translated by the model into one of the app's languages: `en`, `de`, `fr`, `es`, `it`, `pt`, `nl`, `pl`, `tr`, `sv`. Each translation costs one monthly unit; it never takes the free import.
+
+| Route | Request | Success | Errors |
+|-------|---------|---------|--------|
+| `POST /recipes/:id/translations` | header `Idempotency-Key: <lowercase UUID>` (the job id); `TranslationRequest` | 202 `TranslationJob` with `status: "pending"` | 400 `invalid_body` (not one of the ten languages); 400 `invalid_id` (path or key); 402 `subscription_required` (`entitlement.active` is false); 402 `quota_exhausted` (30 monthly units used); 403 `consent_required`; 404 (the recipe does not exist for this user, or is deleted); 409 `job_running` (another job of this user, import or translation, is open); 411 `length_required`; 429 `attempt_limit`; 429 `rate_limited` |
+| `GET /jobs/:id` | none | 200 `TranslationJob` | 404 as for imports |
+
+```jsonc
+// TranslationRequest
+{ "language": "en" }
+// TranslationJob: the ImportJob shape with kind "translation", draft always null, and the target
+{
+  "id": "6d1f2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b",
+  "kind": "translation",
+  "status": "done",               // the same five outcomes as an import
+  "createdAt": "2026-11-25T10:00:00Z",
+  "draft": null,
+  "recipeId": "0b9f6c1e-3a52-4d0f-9a43-2f1d0c6b7e11",
+  "language": "en"
+}
+```
+
+Where the result lives: on the server, with the recipe, one per language. When a translation job ends as `done`, the recipe gets a new `rev`, so the next `GET /recipes?since=` delivers it; the app does not fetch translations separately. A recipe that has at least one translation carries them in a `translations` array (fixture `recipe_translated.json`); a recipe without any has no `translations` field at all, so `recipe.json` is unchanged:
+
+```jsonc
+// Recipe, additional field (server to app only)
+"translations": [
+  {
+    "language": "en",
+    "stale": false,                 // true once the recipe's content changed after this translation was made
+    "title": "Potato salad",
+    "description": "",
+    "ingredients": [ { "quantity": "1", "unit": "kg", "item": "Potatoes", "group": null } ],
+    "steps": ["Boil the potatoes."],
+    "tags": ["Side dish"]
+  }
+]
+```
+
+Rules:
+- `translations` is never sent by the app: `RecipeInput` does not have it and a `PUT` with it is a 400. A `PUT` that changes the recipe's content marks every translation of that recipe `stale: true`; saving it unchanged does not. A new translation into the same language replaces the old one. Deleting the recipe deletes its translations.
+- A translation has exactly the source's number of ingredients, steps and tags, in the same order, and each ingredient keeps the source's `quantity` and `unit` unchanged (not converted). A model answer that breaks this, or a field rule of `RecipeInput`, ends the job as `invalid`.
+- If the recipe changed while the job ran, the translation is still stored and arrives already `stale: true`. If it was deleted meanwhile, the job ends as `failed` (refunded).
+- Because a finished translation raises the recipe's `rev`, an edit started before it arrived gets 412 on save; the app pulls and retries as for any other conflict.
+- Charging, outcomes, refunds, the daily attempt limit and the 10-minute timeout are those of imports (Milestone M2 and M3). A free user gets 402 `subscription_required`; the app shows the paywall.
+- `POST /reports` accepts `"kind": "translation"` with the translation job's id (same body as an import report).
+- `GET /me` `openJobId` names the open job of either kind.
 
 ## Module boundaries
 
