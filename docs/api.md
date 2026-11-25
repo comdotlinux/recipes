@@ -326,6 +326,8 @@ interface ConsentRepository {
     val state: StateFlow<ConsentState>
     /** The notice version this build shows. */
     val currentVersion: Int
+    /** Loads `state` from `GET /me`. False when offline; the state then stays as it was. */
+    suspend fun refresh(): Boolean
     suspend fun accept(): Boolean      // PUT /me/consent
     suspend fun withdraw(): Boolean    // DELETE /me/consent
 }
@@ -345,4 +347,5 @@ Rules:
 - `ImportSource.Photo`: the repository runs `TextRecognizer` first. Readable text is sent as kind `text`; `Unreadable`, or text shorter than the hand-over threshold, sends the JPEG as kind `photo`. The threshold is one constant in the repository and is set from the bake-off numbers.
 - The app sends nothing to an import route before `ConsentState` is `Given` for `currentVersion`.
 - Signing out, and any 401, ends the open job locally and clears `activeJob`.
+- Whenever the repositories read `GET /me` and it names an `openJobId` while no job is active locally (started on another device, or before a reinstall), that job becomes `activeJob`. After a 409 `job_running`, `GET /me` is read once for this.
 - Not in M2: receiving a link shared from another app (Android share intent, iOS share extension).

@@ -1,5 +1,7 @@
 package com.linux.recipes.data
 
+import kotlin.concurrent.atomics.AtomicBoolean
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlinx.io.buffered
 import kotlinx.io.files.FileSystem
 import kotlinx.io.files.Path
@@ -35,13 +37,24 @@ class RecipeCache(private val root: Path, private val fs: FileSystem = SystemFil
     }
 
     /**
-     * Read, change, write. Callers run on the main dispatcher and this never suspends, so the recipe sync and the
-     * import repository cannot overwrite each other's fields.
+     * The only way to change the settings: read, change, write under one lock, so the recipe sync (cursor) and the
+     * import repository (job) never overwrite each other's field, from whatever thread they run. Not suspending,
+     * because `ImportRepository.acknowledge` is not.
      */
-    fun updateSettings(change: (Settings) -> Settings) = writeSettings(change(readSettings()))
+    @OptIn(ExperimentalAtomicApi::class)
+    fun updateSettings(change: (Settings) -> Settings) {
+        // shortcut: a spin lock, held for one small file write; common code has no blocking lock without adding
+        // atomicfu as a direct dependency. Upgrade to a real lock if updates ever get slow or frequent.
+        while (!settingsLock.compareAndSet(expectedValue = false, newValue = true)) Unit
+        try {
+            writeAtomic(settingsFile, json.encodeToString(Settings.serializer(), change(readSettings())).encodeToByteArray())
+        } finally {
+            settingsLock.store(false)
+        }
+    }
 
-    fun writeSettings(settings: Settings) =
-        writeAtomic(settingsFile, json.encodeToString(Settings.serializer(), settings).encodeToByteArray())
+    @OptIn(ExperimentalAtomicApi::class)
+    private val settingsLock = AtomicBoolean(false)
 
     fun imagePath(imageId: String): String? = imageFile(imageId)?.takeIf { fs.exists(it) }?.toString()
 

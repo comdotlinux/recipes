@@ -66,6 +66,9 @@ interface ConsentRepository {
     /** The notice version this build shows. */
     val currentVersion: Int
 
+    /** Loads [state] from `GET /me`. False when offline; the state then stays as it was. */
+    suspend fun refresh(): Boolean
+
     /** `PUT /me/consent` */
     suspend fun accept(): Boolean
 

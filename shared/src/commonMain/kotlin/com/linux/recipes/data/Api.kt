@@ -105,6 +105,8 @@ data class Me(
     val quota: Quota,
     val storage: Storage,
     val consentVersion: Int? = null,
+    /** The user's import job that is still pending or running, if any. */
+    val openJobId: String? = null,
 ) {
     @Serializable data class Suspension(val reason: String)
     @Serializable data class Entitlement(val active: Boolean, val expiresAt: String? = null)

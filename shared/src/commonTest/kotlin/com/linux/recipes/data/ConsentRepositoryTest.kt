@@ -18,17 +18,17 @@ class ConsentRepositoryTest {
     fun stateComesFromMe() = runTest {
         assertEquals(ConsentState.Unknown, repo.state.value)
         server.handler = { json(fixture("me.json")) }
-        repo.refresh()
+        assertTrue(repo.refresh())
         assertEquals(ConsentState.NotGiven, repo.state.value)
         assertFalse(repo.isGiven)
 
         server.handler = { json(Api.apiJson.encodeToString(Me.serializer(), me.copy(consentVersion = 1))) }
-        repo.refresh()
+        assertTrue(repo.refresh())
         assertEquals(ConsentState.Given(1), repo.state.value)
         assertTrue(repo.isGiven)
 
         server.offline = true
-        assertNull(repo.refresh())
+        assertFalse(repo.refresh())
         assertEquals(ConsentState.Given(1), repo.state.value, "offline keeps the last known state")
     }
 
@@ -66,7 +66,7 @@ class ConsentRepositoryTest {
         server.handler = { error(401, "unauthenticated") }
         assertFalse(repo.accept())
         assertFalse(repo.withdraw())
-        assertNull(repo.refresh())
+        assertFalse(repo.refresh())
         assertEquals(3, unauthorizedCalls)
 
         server.handler = {

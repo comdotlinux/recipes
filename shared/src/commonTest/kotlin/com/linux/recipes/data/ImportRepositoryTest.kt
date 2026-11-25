@@ -118,7 +118,7 @@ class ImportRepositoryTest {
         val cases = listOf(
             Triple(402, "quota_exhausted", ImportStart.QuotaExhausted),
             Triple(429, "attempt_limit", ImportStart.AttemptLimit),
-            Triple(429, "rate_limited", ImportStart.Rejected("rate_limited")),
+            Triple(429, "rate_limited", ImportStart.Offline),
             Triple(409, "job_running", ImportStart.AlreadyRunning),
             Triple(400, "invalid_url", ImportStart.Rejected("invalid_url")),
             Triple(400, "invalid_body", ImportStart.Rejected("invalid_body")),
@@ -327,6 +327,46 @@ class ImportRepositoryTest {
         assertEquals(ConsentState.Unknown, graph.consent.state.value)
         assertEquals(emptyList(), filesBelow(Path(filesDir, AppGraph.CACHE_DIR)))
         assertTrue(server.requests.any { it.method == HttpMethod.Delete && it.url.encodedPath == "/v1/session" })
+    }
+
+    @Test
+    fun aJobOpenOnTheServerIsAdoptedWheneverMeIsRead() = runTest {
+        me = me.copy(openJobId = jobId)
+        val repo = repository()
+        repo.quota()
+        assertEquals(ImportJobState(jobId, "", null, false), repo.activeJob.value, "kind unknown until the first poll")
+        assertEquals(jobId, repository().activeJob.value?.jobId, "kept across a restart")
+
+        poll("done")
+        current.resume()
+        assertEquals("url", current.activeJob.value?.kind)
+        assertTrue(current.activeJob.value?.outcome is ImportOutcome.Done)
+
+        // With a local job, another open id is not taken over.
+        me = me.copy(openJobId = "11111111-2222-4333-8444-555555555555")
+        current.quota()
+        assertEquals(jobId, current.activeJob.value?.jobId)
+    }
+
+    @Test
+    fun consentRefreshAlsoAdoptsTheOpenJob() = runTest {
+        me = me.copy(openJobId = jobId)
+        val consent = consent()
+        val repo = repository(consent)
+        assertTrue(consent.refresh())
+        assertEquals(jobId, repo.activeJob.value?.jobId)
+    }
+
+    @Test
+    fun alreadyRunningReadsMeOnceAndHoldsTheJob() = runTest {
+        val consent = consent()
+        val repo = repository(consent)
+        assertTrue(consent.refresh()) // consent known, no open job yet
+        me = me.copy(openJobId = jobId) // started on another device meanwhile
+        startAnswer = { error(409, "job_running") }
+        assertEquals(ImportStart.AlreadyRunning, repo.start(ImportSource.Link("https://example.org/a"), "11111111-2222-4333-8444-555555555555"))
+        assertEquals(ImportJobState(jobId, "", null, false), repo.activeJob.value)
+        assertEquals(listOf("/v1/me", "/v1/imports", "/v1/me"), server.paths())
     }
 
     @Test

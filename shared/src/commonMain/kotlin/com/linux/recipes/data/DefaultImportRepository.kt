@@ -30,12 +30,17 @@ class DefaultImportRepository(
     )
     override val activeJob: StateFlow<ImportJobState?> = _activeJob.asStateFlow()
 
+    init {
+        // Every `GET /me`, wherever it is read, may name a job started on another device or before a reinstall.
+        consent.onMe = { adopt(it.openJobId) }
+    }
+
     override suspend fun start(source: ImportSource, jobId: String): ImportStart {
         // The same key again after Offline is the same job: the server answers 202 with it and charges nothing.
         _activeJob.value?.takeIf { it.jobId == jobId }?.let { return ImportStart.Started(jobId) }
         val token = currentToken()
         val started = generation
-        if (consent.state.value == ConsentState.Unknown && consent.refresh() == null) return ImportStart.Offline
+        if (consent.state.value == ConsentState.Unknown && consent.loadMe() == null) return ImportStart.Offline
         if (!consent.isGiven) return ImportStart.ConsentRequired
         val result = when (source) {
             is ImportSource.Link -> api.startImport(jobId, ImportRequest(kind = "url", url = source.url))
@@ -53,12 +58,14 @@ class DefaultImportRepository(
             ApiResult.Offline -> ImportStart.Offline
             is ApiResult.Failure -> when {
                 result.status == 401 -> ImportStart.Rejected(result.wire).also { unauthorized(token) }
-                result.status >= 500 -> ImportStart.Offline
+                // 5xx and rate_limited: try again later with the same id, as M1 does for saves.
+                result.status >= 500 || result.code == ErrorCode.RateLimited -> ImportStart.Offline
                 result.code == ErrorCode.ConsentRequired -> ImportStart.ConsentRequired.also { consent.markNotGiven() }
                 result.code == ErrorCode.QuotaExhausted -> ImportStart.QuotaExhausted
                 result.code == ErrorCode.AttemptLimit -> ImportStart.AttemptLimit
-                result.code == ErrorCode.JobRunning -> ImportStart.AlreadyRunning
-                // rate_limited, invalid_url, text_too_large, image_too_large, unsupported_media_type, ...
+                // The open job is named in `GET /me`; loadMe() adopts it through onMe.
+                result.code == ErrorCode.JobRunning -> ImportStart.AlreadyRunning.also { if (_activeJob.value == null) consent.loadMe() }
+                // invalid_url, text_too_large, image_too_large, unsupported_media_type, ...
                 else -> ImportStart.Rejected(result.wire)
             }
         }
@@ -92,7 +99,7 @@ class DefaultImportRepository(
         cache.updateSettings { it.copy(importJobId = null, importJobKind = null) }
     }
 
-    override suspend fun quota(): Quota? = consent.refresh()?.let {
+    override suspend fun quota(): Quota? = consent.loadMe()?.let {
         Quota(it.quota.freeImportUsed, it.quota.monthUsed, it.quota.monthLimit, entitled = it.entitlement.active)
     }
 
@@ -113,6 +120,13 @@ class DefaultImportRepository(
         generation++
         _activeJob.value = null
         if (cache.readSettings().importJobId != null) cache.updateSettings { it.copy(importJobId = null, importJobKind = null) }
+    }
+
+    /** A job open on the server while none is active here; its kind is known after the first poll. */
+    private fun adopt(openJobId: String?) {
+        if (openJobId == null || _activeJob.value != null) return
+        _activeJob.value = ImportJobState(openJobId, "", null, offline = false)
+        cache.updateSettings { it.copy(importJobId = openJobId, importJobKind = null) }
     }
 
     private fun track(job: ImportJob) {

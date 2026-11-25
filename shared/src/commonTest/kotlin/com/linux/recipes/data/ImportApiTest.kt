@@ -9,6 +9,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 
 /** The M2 routes of docs/api.md against the contract fixtures. */
 class ImportApiTest {
@@ -140,5 +143,13 @@ class ImportApiTest {
         val me = (api.me() as ApiResult.Ok).value
         assertNull(me.consentVersion)
         assertEquals(Me.Quota(freeImportUsed = false, monthUsed = 0, monthLimit = 30), me.quota)
+    }
+
+    @Test
+    fun meDecodesWithAndWithoutOpenJobId() {
+        val withoutField = Api.apiJson.parseToJsonElement(fixture("me.json")).jsonObject - "openJobId"
+        assertNull(Api.apiJson.decodeFromString(Me.serializer(), JsonObject(withoutField).toString()).openJobId)
+        val withField = JsonObject(withoutField + ("openJobId" to JsonPrimitive(jobId)))
+        assertEquals(jobId, Api.apiJson.decodeFromString(Me.serializer(), withField.toString()).openJobId)
     }
 }

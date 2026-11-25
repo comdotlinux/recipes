@@ -6,8 +6,9 @@ import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * AI consent from `GET /me` (`consentVersion`), changed with `PUT` and `DELETE /me/consent`.
- * The state stays [ConsentState.Unknown] until [refresh] reached the server; [DefaultImportRepository.quota]
- * and [DefaultImportRepository.start] refresh it. A 401 ends the session as in [DefaultRecipeRepository].
+ * The state stays [ConsentState.Unknown] until `GET /me` reached the server: through [refresh], or as a side
+ * effect of [DefaultImportRepository.quota] and [DefaultImportRepository.start]. A 401 ends the session as in
+ * [DefaultRecipeRepository].
  */
 class DefaultConsentRepository(
     private val api: Api,
@@ -19,14 +20,22 @@ class DefaultConsentRepository(
 
     override val currentVersion: Int = AI_NOTICE_VERSION
 
+    /** Runs with every `GET /me` answer; [DefaultImportRepository] uses it to adopt a job open on the server. */
+    internal var onMe: (Me) -> Unit = {}
+
     /** True when the user accepted the notice this build shows. Import routes are only called then. */
     val isGiven: Boolean get() = _state.value == ConsentState.Given(currentVersion)
 
+    override suspend fun refresh(): Boolean = loadMe() != null
+
     /** `GET /me`: updates [state] and returns the answer, or null when the server could not be reached. */
-    suspend fun refresh(): Me? {
+    suspend fun loadMe(): Me? {
         val token = currentToken()
         return when (val result = api.me()) {
-            is ApiResult.Ok -> result.value.also { _state.value = stateOf(it.consentVersion) }
+            is ApiResult.Ok -> result.value.also {
+                _state.value = stateOf(it.consentVersion)
+                onMe(it)
+            }
             else -> null.also { if (result.isUnauthorized()) unauthorized(token) }
         }
     }
