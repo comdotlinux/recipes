@@ -299,10 +299,10 @@ Only a subscriber can create a link (402 `subscription_required` otherwise). Any
 
 | Route | Request | Success | Errors |
 |-------|---------|---------|--------|
-| `POST /recipes/:id/shares` | none | 201 `ShareCreated` | 400 `invalid_id`; 402 `subscription_required`; 403 `consent_required` (only when the recipe has pictures: they are checked by the model first); 404 (not this user's recipe); 422 `picture_rejected` (a picture failed the check; the app says which recipe and asks to remove the picture); 429 `share_limit` (10 new links per UTC day); 429 `rate_limited`; 503 `screening_unavailable` (try again later) |
+| `POST /recipes/:id/shares` | none | 201 `ShareCreated` | 400 `invalid_id`; 402 `subscription_required`; 403 `consent_required` (only when the recipe has pictures: they are checked by the model first); 404 (not this user's recipe); 422 `picture_rejected` (a picture failed the check; the app says which recipe and asks to remove the picture); 429 `share_limit` (10 new links, or 30 picture checks, per UTC day); 429 `rate_limited`; 503 `screening_unavailable` (try again later) |
 | `DELETE /shares/:shareId` | none | 204 | 400 `invalid_id`; 404 (not this user's share) |
-| `GET /shares/:shareToken` | none | 200 `SharePreview` | 404 `not_found` (not a valid link, or unknown); 409 `own_share`; 410 `share_gone` |
-| `POST /shares/:shareToken/accept` | none | 200 `Recipe` (the copy) | 404; 409 `own_share`; 409 `recipe_limit`; 410 `share_gone`; 413 `recipe_storage_cap`; 413 `storage_cap`; 422 `share_unreadable` (no readable text left, see below) |
+| `POST /shares/open` | `ShareTokenBody` | 200 `SharePreview` | 400 `invalid_body`; 404 `not_found` (not a valid link, or unknown); 409 `own_share`; 410 `share_gone`; 411 `length_required` |
+| `POST /shares/accept` | `ShareTokenBody` | 200 `Recipe` (the copy) | 400 `invalid_body`; 404; 409 `own_share`; 409 `recipe_limit`; 410 `share_gone`; 411 `length_required`; 413 `recipe_storage_cap`; 413 `storage_cap`; 422 `share_unreadable` (no readable text left, see below) |
 | `POST /reports` | `ShareReport` | 204 | 400 `invalid_body`; 404; 409 `own_share`; 410 `share_gone` |
 
 ```jsonc
@@ -311,7 +311,7 @@ Only a subscriber can create a link (402 `subscription_required` otherwise). Any
   "shareId": "3f2a9c4d5e6b7a8f9c0d1e2f3a4b5c6d",   // the owner's handle for DELETE; 32 lowercase hex characters
   "token": "<107 base64url characters>",          // the public value in the link
   "expiresAt": "2026-12-25T10:00:00Z",           // 30 days after creation
-  "url": "https://<this host>/s/<token>"          // what the app hands to the share sheet
+  "url": "https://<this host>/s#<token>"          // what the app hands to the share sheet; the token is in the fragment
 }
 // SharePreview: the recipe's text only, never pictures or anything else of the owner
 {
@@ -320,12 +320,14 @@ Only a subscriber can create a link (402 `subscription_required` otherwise). Any
   "imageCount": 1,                                // pictures the copy will get
   "expiresAt": "2026-12-25T10:00:00Z"
 }
+// ShareTokenBody (fixture share_token_body.json)
+{ "shareToken": "<token>" }
 // ShareReport
 { "kind": "share", "shareToken": "<token>", "reason": "offensive", "note": "" }   // reason and note as in Report
 ```
 
 Rules:
-- The link is `https://<host>/s/<token>`. The app takes the token from the path (Android App Link, iOS Universal Link, or pasted) and calls `GET /shares/:token`, then `POST /shares/:token/accept` when the user confirms. The token is opaque to the app.
+- The link is `https://<host>/s#<token>`. The token is in the fragment, which browsers never send, and it travels to the API only in request bodies, never in a URL path or query, because proxies and request logs keep URLs. The app takes the token from the fragment of the link it was opened with (Android App Link, iOS Universal Link, or pasted), or on Android from the string extra `shareToken` when the landing page opened it, and calls `POST /shares/open`, then `POST /shares/accept` when the user confirms. The token is opaque to the app.
 - A token that is not genuine answers 404 without reaching anyone's data. A link that expired (30 days), was revoked by its owner or by a report, whose recipe was deleted, whose owner's account is suspended or being deleted, or that already has 10 distinct recipients answers 410 `share_gone` (a recipient who already accepted still gets their copy).
 - Accept is keyed by recipient: the copy has a fixed id derived from the link and the recipient, so repeating the accept returns the existing copy unchanged, including the recipient's own edits since. If the recipient deleted the copy, the next accept creates it again.
 - The copy has `sourceType: "shared"`, `sourceUrl: null`, new picture ids, and the text with control and bidirectional characters removed (empty ingredients, steps and tags dropped). If no title is left after that, the accept answers 422 `share_unreadable`.
@@ -333,15 +335,20 @@ Rules:
 - Pictures: when a link is created, every picture of the recipe that has not been checked yet is checked once by a vision model (safe or not); a picture with new bytes is checked again. Only pictures that passed are ever shared, so a picture added to the recipe after the link was made is not part of the copy until a new link is made. A recipe without pictures needs no AI consent to be shared.
 - A report of a shared recipe revokes the link at once. Reporting the same link again answers 204 and changes nothing.
 - The response of `POST /recipes/:id/shares` is the only time the app sees the token; the owner keeps `shareId` to revoke the link. There is no list of an owner's links in this milestone.
+- A link keeps working until it expires even if the owner's subscription lapses meanwhile: it was made while subscribed. Only making a new link needs the subscription.
+- Picture checks are limited to 30 model calls per user and UTC day (each check of one picture is one call, also when the share then fails with 422 or 503); beyond that `POST /recipes/:id/shares` answers 429 `share_limit` until the next day.
+- Accept checks the recipient's recipe count and recipe text first, so a recipient at one of these limits gets 409 or 413 without using up one of the link's ten recipient places.
+- Translations count toward the 20 MB of recipe text (`recipe_storage_cap`); a translation that would pass it ends as `invalid` and is refunded.
+- Not decided yet: suspended users can still create, open, accept and report links; this is revisited when suspension is built (Milestone M6).
 
 ### PDF
 
 | Route | Request | Success | Errors |
 |-------|---------|---------|--------|
-| `GET /recipes/:id/pdf` | none | 200 `application/pdf` bytes, `Content-Disposition: attachment; filename="recipe.pdf"`, `Cache-Control: private, no-store` | 400 `invalid_id`; 404 (not this user's recipe, or deleted); 429 `pdf_limit` (20 PDFs per UTC day); 429 `rate_limited`; 503 `pdf_unavailable` (the rendering service failed; nothing is counted; the local environment always answers this) |
+| `GET /recipes/:id/pdf` | none | 200 `application/pdf` bytes, `Content-Disposition: attachment; filename="recipe.pdf"`, `Cache-Control: private, no-store` | 400 `invalid_id`; 404 (not this user's recipe, or deleted); 429 `pdf_limit` (20 PDFs, or 40 failed renders, per UTC day); 429 `rate_limited`; 503 `pdf_unavailable` (the rendering service failed; nothing is counted; the local environment always answers this) |
 
-- Free for every signed-in user (no subscription), 20 per user and UTC day; a failed render does not count.
-- The PDF shows title, servings and times, the recipe's pictures, description, ingredients (with group headings), steps and tags, as plain text. Headings in the PDF are English for now.
+- Free for every signed-in user (no subscription), 20 per user and UTC day; a failed render does not count against these 20 but against a separate 40 a day.
+- The PDF shows title, servings and times, the recipe's pictures, description, ingredients (with group headings), steps and tags, as plain text. The few fixed texts (headings, "servings", "min") are in the recipe's `language` when it is one of the app's ten languages, otherwise English.
 
 ### App links and the landing page
 
@@ -349,11 +356,11 @@ Served by the Worker, not under `/v1`:
 
 | Path | Content |
 |------|---------|
-| `GET /s/<token>` | static page `backend/public/s/index.html`: says a recipe was shared and offers to open the app; shows nothing of the recipe. Headers: `Content-Security-Policy: default-src 'none'; script-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`. Its only script, `/share-landing.js`, turns the button into an Android intent link for the same URL (package `com.linux.recipes`, falling back to Google Play) |
+| `GET /s` (link `/s#<token>`) | static page `backend/public/s/index.html`: says a recipe was shared and offers to open the app; shows nothing of the recipe. Headers: `Content-Security-Policy: default-src 'none'; script-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`. Its only script, `/share-landing.js`, reads the token from `location.hash` and on Android turns the button into an intent link (package `com.linux.recipes`, token in the string extra `shareToken`, falling back to Google Play) |
 | `GET /.well-known/assetlinks.json` | Android App Links statement for package `com.linux.recipes` with the fingerprints in the Worker variable `ANDROID_CERT_SHA256` (comma-separated, `AA:BB:...` form, 32 bytes each) |
-| `GET /.well-known/apple-app-site-association` | Universal Links for app id `<APPLE_TEAM_ID>.com.linux.recipes`, path `/s/*`, from the Worker variable `APPLE_TEAM_ID` (10 characters) |
+| `GET /.well-known/apple-app-site-association` | Universal Links for app id `<APPLE_TEAM_ID>.com.linux.recipes`, path `/s`, from the Worker variable `APPLE_TEAM_ID` (10 characters) |
 
-Both `.well-known` files are JSON (`application/json`), without redirects, as the Android and Apple documentation require. They answer 404 while their variable is unset or malformed: the signing certificate fingerprint (Play App Signing) and the Apple team id are filled in by the provisioning step. App side: Android declares an `autoVerify` intent filter for `https://<host>/s/*`; iOS adds the associated domain `applinks:<host>`. The bundle id `com.linux.recipes` is assumed to be the same on both platforms.
+Both `.well-known` files are JSON (`application/json`), without redirects, as the Android and Apple documentation require. They answer 404 while their variable is unset or malformed: the signing certificate fingerprint (Play App Signing) and the Apple team id are filled in by the provisioning step. App side: Android declares an `autoVerify` intent filter for `https://<host>` with `android:path="/s"` and reads the token from `intent.data` (the fragment) or the `shareToken` extra; iOS adds the associated domain `applinks:<host>` and reads the fragment of `NSUserActivity.webpageURL`. The app id is `com.linux.recipes` on both platforms. Fragments in app links: both platforms' matching rules can match on the fragment (`"#"` in Apple's `components` and in Android's dynamic App Link rules), so the system sees it; neither page states in words that the delivered URL keeps it, so this still has to be checked on a device (UNVERIFIED).
 
 ## Module boundaries
 

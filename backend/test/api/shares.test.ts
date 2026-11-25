@@ -5,11 +5,12 @@ import acceptFixture from "../../../contract/fixtures/share_accept_response.json
 import createdFixture from "../../../contract/fixtures/share_created.json";
 import previewFixture from "../../../contract/fixtures/share_preview.json";
 import shareReportFixture from "../../../contract/fixtures/report_share.json";
+import tokenBodyFixture from "../../../contract/fixtures/share_token_body.json";
 import { SCREEN_PROMPT } from "../../src/ai/screen-image";
 import { newSessionToken } from "../../src/auth";
 import { SHARE_RECIPIENT_LIMIT, derivedId, newShareId, newShareToken, openReportReference, openShareToken, reportReference } from "../../src/share";
 import { LOCAL_UNSAFE_PICTURE } from "../../src/testing/local-ai";
-import { type Session, call, inObject, interceptOutbound, signIn, uuid } from "./helpers";
+import { type Session, call, inObject, interceptOutbound, json, signIn, uuid } from "./helpers";
 
 type Created = typeof createdFixture;
 type Recipe = typeof acceptFixture & { translations?: unknown };
@@ -81,8 +82,8 @@ const created = async (s: Session, recipeId: string) => {
 	expect(res.status).toBe(201);
 	return (await res.json()) as Created;
 };
-const preview = (s: Session, token: string) => call(`/shares/${token}`, { token: s.token });
-const accept = (s: Session, token: string) => call(`/shares/${token}/accept`, { method: "POST", token: s.token });
+const preview = (s: Session, token: string) => call("/shares/open", { method: "POST", token: s.token, ...json({ ...tokenBodyFixture, shareToken: token }) });
+const accept = (s: Session, token: string) => call("/shares/accept", { method: "POST", token: s.token, ...json({ ...tokenBodyFixture, shareToken: token }) });
 const list = async (s: Session) => ((await (await call("/recipes", { token: s.token })).json()) as { recipes: Recipe[] }).recipes;
 const report = (s: Session, shareToken: string) =>
 	call("/reports", { method: "POST", token: s.token, body: JSON.stringify({ ...shareReportFixture, shareToken }), headers: { "content-type": "application/json" } });
@@ -103,6 +104,11 @@ describe("share tokens", () => {
 		const { token: session } = await newSessionToken(ownerId, env);
 		expect(await openShareToken(session, env)).toBeNull();
 		expect(await openShareToken("../../me", env)).toBeNull();
+		// Non-canonical base64url: the same bytes with the two unused low bits of the last character set.
+		const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+		const lastBits = alphabet.indexOf(token[106]);
+		expect(lastBits % 4).toBe(0);
+		expect(await openShareToken(token.slice(0, 106) + alphabet[lastBits + 1], env)).toBeNull();
 	});
 
 	it("a token made with the previous key still opens during a rotation (AC34)", async () => {
@@ -132,7 +138,7 @@ describe("creating and revoking links", () => {
 		expect(res.status).toBe(201);
 		const body = (await res.json()) as Created;
 		expect(Object.keys(body)).toEqual(Object.keys(createdFixture));
-		expect(body.url).toBe(`http://localhost/s/${body.token}`);
+		expect(body.url).toBe(`http://localhost/s#${body.token}`);
 		expect(body.shareId).toMatch(/^[0-9a-f]{32}$/);
 		expect(Date.parse(body.expiresAt) - Date.now()).toBeGreaterThan(29.9 * 86_400_000);
 		expect(await openShareToken(body.token, env)).toEqual({ ownerId: s.userId, shareId: body.shareId });
@@ -217,6 +223,24 @@ describe("share-time picture check", () => {
 		});
 		expect(await code(await share(s, id))).toBe("picture_rejected");
 		expect(modelCalls).toBe(1);
+	});
+
+	it("picture checks are capped at 30 a day per user, also when every share fails with 422 (security review M5)", async () => {
+		const s = await owner();
+		fakeScreen(false);
+		const id = await recipe(s, [jpeg()]);
+		const [{ id: imageId }] = (await sql(s, "SELECT id FROM images")) as { id: string }[];
+		const statuses: number[] = [];
+		// New bytes under the same id reset the check, so each round calls the model again until the cap.
+		for (let i = 0; i < 32; i++) {
+			await call(`/recipes/${id}/images/${imageId}`, { method: "PUT", token: s.token, body: jpeg(), headers: { "content-type": "image/jpeg" } });
+			statuses.push((await share(s, id)).status);
+		}
+		expect(modelCalls).toBe(30);
+		expect(statuses.slice(0, 30).every((n) => n === 422)).toBe(true);
+		const res = await share(s, id);
+		expect([res.status, await code(res)]).toEqual([429, "share_limit"]);
+		expect(statuses.slice(30)).toEqual([429, 429]);
 	});
 
 	it("uses its own global rate-limit key", async () => {
@@ -314,6 +338,40 @@ describe("preview and accept (AC25)", () => {
 		expect((await accept(b, own.token)).status).toBe(410);
 		expect((await preview(b, own.token)).status).toBe(410);
 		expect(await sql(b, "SELECT count(*) AS n FROM recipes")).toEqual([{ n: 0 }]);
+	});
+
+	it("a link keeps working until it expires after the owner's subscription lapsed; a new link needs it again", async () => {
+		const a = await owner();
+		const id = await recipe(a);
+		const link = await created(a, id);
+		await setMeta(a, "entitlement", JSON.stringify({ active: false, expiresAt: null }));
+		const b = await signIn();
+		expect((await preview(b, link.token)).status).toBe(200);
+		expect((await accept(b, link.token)).status).toBe(200);
+		expect(await code(await share(a, id))).toBe("subscription_required");
+	});
+
+	it("a recipient at the recipe count or text cap is refused before taking one of the ten places", async () => {
+		const a = await owner();
+		const link = await created(a, await recipe(a));
+		const b = await signIn();
+		await setMeta(b, "recipe_bytes", String(20_971_520));
+		expect(await code(await accept(b, link.token))).toBe("recipe_storage_cap");
+		await setMeta(b, "recipe_bytes", "0");
+		await inObject(b.userId, (_i, st) => {
+			for (let i = 0; i < 2000; i++) st.storage.sql.exec("INSERT INTO recipes (id, rev, deleted, updated_at, json) VALUES (?, 0, 0, 0, '{}')", `filler-${i}`);
+		});
+		expect(await code(await accept(b, link.token))).toBe("recipe_limit");
+		expect(await sql(a, "SELECT count(*) AS n FROM share_accepts")).toEqual([{ n: 0 }]);
+	});
+
+	it("eleven concurrent accepts by distinct recipients: exactly ten get a copy, one gets 410", async () => {
+		const a = await owner();
+		const link = await created(a, await recipe(a));
+		const recipients = await Promise.all(Array.from({ length: SHARE_RECIPIENT_LIMIT + 1 }, () => signIn()));
+		const statuses = (await Promise.all(recipients.map((r) => accept(r, link.token)))).map((r) => r.status);
+		expect(statuses.sort()).toEqual([...Array(SHARE_RECIPIENT_LIMIT).fill(200), 410]);
+		expect(await sql(a, "SELECT count(*) AS n FROM share_accepts")).toEqual([{ n: SHARE_RECIPIENT_LIMIT }]);
 	});
 
 	it("an accept over the recipient's picture cap, recipe count or text cap copies nothing (413 / 409)", async () => {

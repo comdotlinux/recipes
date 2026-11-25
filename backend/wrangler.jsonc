@@ -13,7 +13,7 @@
   // fetch() to a hostname of our own zone goes through Cloudflare's front door, not straight to the origin
   // (https://developers.cloudflare.com/workers/configuration/compatibility-flags/, "Global fetch() strictly public", checked 2026-11-24).
   "compatibility_flags": ["global_fetch_strictly_public"],
-  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/v1/*", "/turnstile.html", "/s/*", "/.well-known/*"] },
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/v1/*", "/turnstile.html", "/s", "/.well-known/*"] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["UserDO"] }],
   "durable_objects": { "bindings": [{ "name": "USER_DO", "class_name": "UserDO" }] },
   "secrets": { "required": ["USER_ID_PEPPER", "SERVER_KEY", "TURNSTILE_SECRET", "REVENUECAT_API_KEY", "REVENUECAT_WEBHOOK_SECRET"] },
@@ -32,6 +32,9 @@
   ],
   "workers_dev": false,
   "preview_urls": false,
+  // Workers Logs (docs/versions/backend.md, "Logs"): no invocation logs (one line per request with method and URL);
+  // only the Worker's own console lines, which name events and codes only. Query strings redacted if logs ever name a URL.
+  "observability": { "enabled": true, "redact_query_string": true, "logs": { "enabled": true, "invocation_logs": false, "head_sampling_rate": 1 }, "traces": { "enabled": false } },
   "env": {
     // Local dev and tests only: test entry with the test IdP. No AI binding,
     // because Workers AI always calls the account; a local AI stub is added when M2 needs one.

@@ -178,9 +178,9 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 		return c.html(turnstilePage(siteKey));
 	});
 
-	// docs/api.md "Milestone M5": a share link opened without the app. The page is static and shows nothing of the recipe;
-	// no-referrer keeps the token in the path from leaking to the store pages it links to.
-	app.get("/s/:token", async (c) => {
+	// docs/api.md "Milestone M5": a share link opened without the app, `/s#<token>`. The token is in the fragment, which
+	// browsers never send, so it reaches neither this Worker nor any log. The page is static and shows nothing of the recipe.
+	app.get("/s", async (c) => {
 		const page = await c.env.ASSETS.fetch(new URL("/s/", c.req.url));
 		return new Response(page.body, {
 			status: page.ok ? 200 : 404,
@@ -189,7 +189,7 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 				"content-security-policy": LANDING_CSP,
 				"x-content-type-options": "nosniff",
 				"referrer-policy": "no-referrer",
-				"cache-control": "public, max-age=3600",
+				"cache-control": "no-store",
 			},
 		});
 	});
@@ -206,7 +206,7 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 	app.get("/.well-known/apple-app-site-association", (c) => {
 		const team = c.env.APPLE_TEAM_ID ?? "";
 		if (!/^[A-Z0-9]{10}$/.test(team)) return fail(c, 404, "not_found", "APPLE_TEAM_ID is not set");
-		return c.json({ applinks: { details: [{ appIDs: [`${team}.${APP_ID}`], components: [{ "/": "/s/*", comment: "share links" }] }] } });
+		return c.json({ applinks: { details: [{ appIDs: [`${team}.${APP_ID}`], components: [{ "/": "/s", comment: "share links; the token is in the fragment" }] }] } });
 	});
 
 	app.post("/v1/session/nonce", async (c) => {
@@ -413,7 +413,10 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 		}),
 	);
 
-	/** The share token from the path, opened here: one that does not authenticate is a 404 before any object is used. */
+	/**
+	 * The share token from the body (never a URL: proxies and request logs keep URLs), opened here: one that does not
+	 * authenticate is a 404 before any object is used.
+	 */
 	const sharedBy = async (c: C, token: string) => {
 		const opened = await openShareToken(token, c.env);
 		if (!opened) systemEvent(c.env, { event: "auth_failure", reason: "share_token" });
@@ -429,7 +432,7 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 			const result = await o.createShare(a.secretHash, c.req.param("id")!);
 			if (result.status !== 201) return result;
 			const body = result.body as { token: string };
-			return { ...result, body: { ...body, url: `${new URL(c.req.url).origin}/s/${body.token}` } };
+			return { ...result, body: { ...body, url: `${new URL(c.req.url).origin}/s#${body.token}` } };
 		}),
 	);
 
@@ -438,19 +441,28 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 		authed(async (o, a, c) => (SHARE_ID.test(c.req.param("shareId")!) ? o.deleteShare(a.secretHash, c.req.param("shareId")!) : error(400, "invalid_id", "not a share id"))),
 	);
 
-	app.get(
-		"/v1/shares/:token",
+	/** `{ shareToken }` from the body, opened; or the answer to give. */
+	const shareFromBody = async (c: C) => {
+		const body = await readJson(c, 1024);
+		if ("fail" in body) return body.fail;
+		const parsed = z.strictObject({ shareToken: z.string().max(200) }).safeParse(body.value);
+		if (!parsed.success) return error(400, "invalid_body", "send { shareToken }");
+		return (await sharedBy(c, parsed.data.shareToken)) ?? SHARE_NOT_FOUND;
+	};
+
+	app.post(
+		"/v1/shares/open",
 		authed(async (o, a, c) => {
-			const share = await sharedBy(c, c.req.param("token")!);
-			return share ? o.previewShare(a.secretHash, share.ownerId, share.shareId) : SHARE_NOT_FOUND;
+			const share = await shareFromBody(c);
+			return "ownerId" in share ? o.previewShare(a.secretHash, share.ownerId, share.shareId) : share;
 		}),
 	);
 
 	app.post(
-		"/v1/shares/:token/accept",
+		"/v1/shares/accept",
 		authed(async (o, a, c) => {
-			const share = await sharedBy(c, c.req.param("token")!);
-			return share ? o.acceptShare(a.secretHash, share.ownerId, share.shareId) : SHARE_NOT_FOUND;
+			const share = await shareFromBody(c);
+			return "ownerId" in share ? o.acceptShare(a.secretHash, share.ownerId, share.shareId) : share;
 		}),
 	);
 

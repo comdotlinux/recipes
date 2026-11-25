@@ -8,20 +8,23 @@ const PRINT = Array.from({ length: 32 }, (_, i) => (i * 7).toString(16).padStart
 
 describe("share link landing page (AC25)", () => {
 	it("serves the static page for any token with its own CSP, no referrer and no recipe content", async () => {
-		const res = await exports.default.fetch(`http://localhost/s/${token}`);
+		// The browser sends /s only: the token after # never reaches the server.
+		const res = await exports.default.fetch(`http://localhost/s#${token}`);
 		expect(res.status).toBe(200);
 		expect(res.headers.get("content-security-policy")).toBe("default-src 'none'; script-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
 		expect(res.headers.get("referrer-policy")).toBe("no-referrer");
 		expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+		expect(res.headers.get("cache-control")).toBe("no-store");
 		const html = await res.text();
 		expect(html).toContain("Someone shared a recipe with you");
 		expect(html).not.toContain(token);
 		// Only our own script; nothing from a third party.
 		expect([...html.matchAll(/src="([^"]+)"/g)].map((m) => m[1])).toEqual(["/share-landing.js"]);
-		const other = await (await exports.default.fetch("http://localhost/s/anything-else")).text();
-		expect(other).toBe(html);
+		// A token in the path is not a share link any more.
+		expect((await exports.default.fetch(`http://localhost/s/${token}`)).status).toBe(404);
 		const js = await (await env.ASSETS.fetch("https://example.com/share-landing.js")).text();
 		expect(js).toContain("package=com.linux.recipes");
+		expect(js).toContain("location.hash");
 	});
 });
 
@@ -43,9 +46,9 @@ describe(".well-known files for App Links and Universal Links", () => {
 		]);
 	});
 
-	it("apple-app-site-association covers /s/* for the team's app", async () => {
+	it("apple-app-site-association covers /s for the team's app", async () => {
 		const res = await app.request("/.well-known/apple-app-site-association", {}, { ...env, APPLE_TEAM_ID: "ABCDE12345" });
 		expect(res.headers.get("content-type")).toMatch(/^application\/json/);
-		expect(await res.json()).toEqual({ applinks: { details: [{ appIDs: ["ABCDE12345.com.linux.recipes"], components: [{ "/": "/s/*", comment: "share links" }] }] } });
+		expect(await res.json()).toEqual({ applinks: { details: [{ appIDs: ["ABCDE12345.com.linux.recipes"], components: [{ "/": "/s", comment: "share links; the token is in the fragment" }] }] } });
 	});
 });
