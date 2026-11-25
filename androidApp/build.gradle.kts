@@ -11,6 +11,11 @@ android {
 
     defaultConfig {
         applicationId = providers.gradleProperty("APP_ID").get()
+        // App Links verify the host the app talks to (API_BASE_URL, also what the share links carry), per build.
+        val apiBaseUrl = providers.gradleProperty("API_BASE_URL").get()
+        val linkHost = apiBaseUrl.removePrefix("https://").substringBefore('/')
+        require(Regex("^[a-z0-9.-]+$").matches(linkHost)) { "API_BASE_URL must be https://<host>: $apiBaseUrl" }
+        manifestPlaceholders["appLinksHost"] = linkHost
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = 1

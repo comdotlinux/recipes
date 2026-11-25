@@ -36,6 +36,9 @@ import com.linux.recipes.ui.settings.SettingsViewModel
 import com.linux.recipes.ui.signin.SignInScreen
 import com.linux.recipes.ui.signin.SignInViewModel
 import com.linux.recipes.ui.signin.TurnstileChallenge
+import com.linux.recipes.ui.share.IncomingShareLink
+import com.linux.recipes.ui.share.LocalSharing
+import com.linux.recipes.ui.share.SharePreviewScreen
 import kotlinx.serialization.Serializable
 
 @Serializable data object SignInRoute
@@ -48,6 +51,8 @@ import kotlinx.serialization.Serializable
 @Serializable data class ReviewImportRoute(val jobId: String)
 /** The editor on the draft of a photo read on the phone, held by the list's [ImportViewModel]; saving creates a new recipe. */
 @Serializable data object ReviewLocalRoute
+/** The preview of a shared recipe opened by link; the token stays on the device until it is sent in a request body. */
+@Serializable data class SharePreviewRoute(val token: String)
 
 /**
  * The whole app below the theme. [imports] and [consent] are the AI import; without both, no import entry is shown. Signed out, only the sign-in screen exists; signing in or out
@@ -167,9 +172,23 @@ fun RecipesNavHost(
                 onClose = { nav.popBackStack() },
             )
         }
+        composable<SharePreviewRoute> { entry ->
+            val shares = LocalSharing.current?.shares
+            if (shares == null) {
+                LaunchedEffect(Unit) { nav.popBackStack() }
+                return@composable
+            }
+            SharePreviewScreen(
+                shares = shares,
+                token = entry.toRoute<SharePreviewRoute>().token,
+                onBack = { nav.popBackStack() },
+                onAccepted = { id -> nav.navigate(DetailRoute(id)) { popUpTo<SharePreviewRoute> { inclusive = true } } },
+            )
+        }
         composable<SettingsRoute> {
             val billing = LocalBilling.current
             SettingsScreen(viewModel { SettingsViewModel(sessionRepository, consent, imports, billing) }, onBack = { nav.popBackStack() })
         }
     }
+    IncomingShareLink(signedIn) { token -> nav.navigate(SharePreviewRoute(token)) }
 }

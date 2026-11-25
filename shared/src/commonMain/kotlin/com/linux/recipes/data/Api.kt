@@ -252,6 +252,36 @@ class Api(
 
     suspend fun refreshEntitlement(): ApiResult<EntitlementRefresh> = call { post(url("/entitlement/refresh")) { auth() } }
 
+    // M5: sharing and PDF. The share token goes only in request bodies, never in a path or query.
+    suspend fun createShare(recipeId: String): ApiResult<ShareCreated> = call { post(url("/recipes/$recipeId/shares")) { auth() } }
+
+    suspend fun shares(): ApiResult<ShareList> = call { get(url("/shares")) { auth() } }
+
+    suspend fun deleteShare(shareId: String): ApiResult<Unit> = call { delete(url("/shares/$shareId")) { auth() } }
+
+    suspend fun openShare(token: String): ApiResult<SharePreview> = call {
+        post(url("/shares/open")) {
+            auth()
+            json(ShareTokenBody(token))
+        }
+    }
+
+    suspend fun acceptShare(token: String): ApiResult<Recipe> = call {
+        post(url("/shares/accept")) {
+            auth()
+            json(ShareTokenBody(token))
+        }
+    }
+
+    suspend fun reportShare(report: ShareReport): ApiResult<Unit> = call {
+        post(url("/reports")) {
+            auth()
+            json(report)
+        }
+    }
+
+    suspend fun pdf(recipeId: String): ApiResult<ByteArray> = call { get(url("/recipes/$recipeId/pdf")) { auth() } }
+
     private fun url(path: String) = "$baseUrl/v1$path"
 
     private fun HttpRequestBuilder.auth() {

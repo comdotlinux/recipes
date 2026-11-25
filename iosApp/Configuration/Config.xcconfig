@@ -1,3 +1,6 @@
 APP_ID=com.linux.recipes
 APP_NAME=Recipes
 TEAM_ID=
+// Universal links for share links (docs/api.md, "App links and the landing page"). Device builds only: the
+// entitlement needs a provisioning profile with Associated Domains, which simulator builds without a team lack.
+CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*] = iosApp/iosApp.entitlements
