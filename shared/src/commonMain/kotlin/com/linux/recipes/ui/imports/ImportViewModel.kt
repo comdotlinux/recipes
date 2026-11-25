@@ -10,6 +10,7 @@ import com.linux.recipes.data.ConsentState
 import com.linux.recipes.data.ImportRepository
 import com.linux.recipes.data.ImportSource
 import com.linux.recipes.data.ImportStart
+import com.linux.recipes.data.LocalRead
 import com.linux.recipes.data.Quota
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -19,8 +20,10 @@ import kotlin.uuid.Uuid
 enum class StartProblem { Offline, AttemptLimit, InvalidUrl, Rejected, Picture }
 
 /**
- * The import flow on the list screen: the sheet, the AI notice, starting a job, the paywall and the
- * problems that stop a start. The running job itself is only ever read from [ImportRepository.activeJob].
+ * The import flow on the list screen: the sheet, reading a photo on the phone, the AI notice, starting a job,
+ * the paywall and the problems that stop a start. The running job itself is only ever read from
+ * [ImportRepository.activeJob]. A photo is read on the phone first, free and without consent; AI is only
+ * used when the user asks for it ([tidyUp], [readWithAi]).
  */
 class ImportViewModel(
     private val imports: ImportRepository,
@@ -43,6 +46,15 @@ class ImportViewModel(
         private set
     /** True from the tap until the server has answered the start. */
     var starting by mutableStateOf(false)
+        private set
+    /** True while the phone reads a photo. */
+    var reading by mutableStateOf(false)
+        private set
+    /** A photo read on the phone, waiting for or open in the review editor; cleared when that editor closes. */
+    var localDraft by mutableStateOf<LocalRead.Draft?>(null)
+        private set
+    /** A photo the phone could not read; non-null while the sheet that offers AI is shown. */
+    var unreadable by mutableStateOf<ByteArray?>(null)
         private set
 
     private var retrySource: ImportSource? = null
@@ -70,7 +82,42 @@ class ImportViewModel(
         if (url.isNotEmpty()) submit(ImportSource.Link(url))
     }
 
-    fun importPhoto(jpeg: ByteArray) = submit(ImportSource.Photo(jpeg))
+    /** Reads the photo on the phone: no AI notice, no consent and no quota on this path. */
+    fun importPhoto(jpeg: ByteArray) {
+        sheetOpen = false
+        problem = null
+        reading = true
+        viewModelScope.launch {
+            when (val read = imports.readOnDevice(jpeg)) {
+                is LocalRead.Draft -> localDraft = read
+                LocalRead.Unreadable -> unreadable = jpeg
+            }
+            reading = false
+        }
+    }
+
+    /** The review editor of [localDraft] was left: saved or discarded. */
+    fun closeLocalDraft() {
+        localDraft = null
+    }
+
+    /** Discards [localDraft] and lets AI structure the text the phone read; the user confirmed leaving the editor. */
+    fun tidyUp() {
+        val text = localDraft?.text ?: return
+        localDraft = null
+        submit(ImportSource.Text(text))
+    }
+
+    /** Sends the photo the phone could not read to AI. */
+    fun readWithAi() {
+        val jpeg = unreadable ?: return
+        unreadable = null
+        submit(ImportSource.Photo(jpeg))
+    }
+
+    fun closeUnreadable() {
+        unreadable = null
+    }
 
     fun pictureFailed() {
         sheetOpen = false

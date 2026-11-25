@@ -26,6 +26,8 @@ import com.linux.recipes.ui.imports.ImportSheetContent
 import com.linux.recipes.ui.imports.ImportViewModel
 import com.linux.recipes.ui.imports.ReportContent
 import com.linux.recipes.ui.imports.ReviewImportScreen
+import com.linux.recipes.ui.imports.ReviewLocalScreen
+import com.linux.recipes.ui.imports.UnreadableSheetContent
 import com.linux.recipes.ui.list.RecipeListScreen
 import com.linux.recipes.ui.list.RecipeListViewModel
 import com.linux.recipes.ui.settings.SettingsScreen
@@ -170,6 +172,19 @@ class AccessibilityTest : UiTest() {
 
     @Test
     fun reportClickablesAreLabelled() = everyClickableIsLabelled { ReportContent({ _, _ -> }, {}) }
+
+    @Test
+    fun unreadableSheetClickablesAreLabelled() = screen({ UnreadableSheetContent({}, {}, {}) }) { found ->
+        assertEquals(listOf("Read it with AI", "Type it in instead", "Close"), found.map { it.label })
+    }
+
+    @Test
+    fun localReviewClickablesAreLabelled() = screen({
+        ReviewLocalScreen(remember { RecipeEditViewModel(FakeRecipeRepository(), null, "en", localDraft) }, {}, {}, {})
+    }) { found ->
+        assertTrue(found.all { it.label.isNotEmpty() }, "unlabelled: ${found.filter { it.label.isEmpty() }.map { it.info.className }}")
+        assertNotNull(found.singleOrNull { it.label == "Tidy up with AI" }, "found: ${found.map { it.label }}")
+    }
 
     @Test
     fun reviewClickablesAreLabelled() = everyClickableIsLabelled {

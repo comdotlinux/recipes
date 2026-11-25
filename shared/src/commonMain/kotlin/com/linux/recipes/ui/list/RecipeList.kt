@@ -60,6 +60,7 @@ import com.linux.recipes.ui.imports.ImportPaywall
 import com.linux.recipes.ui.imports.ImportSheet
 import com.linux.recipes.ui.imports.ImportStatus
 import com.linux.recipes.ui.imports.ImportViewModel
+import com.linux.recipes.ui.imports.UnreadableSheet
 import androidx.compose.runtime.LaunchedEffect
 import recipes.shared.generated.resources.import_action
 import recipes.shared.generated.resources.import_empty_action
@@ -118,6 +119,7 @@ internal fun List<Recipe>.search(query: String): List<Recipe> {
 /**
  * @param imports the AI import flow; null hides every import entry point.
  * @param onReview opens the review editor for an import job that has a draft.
+ * @param onReviewLocal opens the review editor for the draft of a photo read on the phone.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -128,6 +130,7 @@ fun RecipeListScreen(
     onSettings: () -> Unit,
     imports: ImportViewModel? = null,
     onReview: (String) -> Unit = {},
+    onReviewLocal: () -> Unit = {},
 ) {
     val all by vm.recipes.collectAsState()
     val job = imports?.activeJob?.collectAsState()?.value
@@ -135,6 +138,19 @@ fun RecipeListScreen(
         LaunchedEffect(imports) { imports.followOpenJob() }
         val pictures = rememberPictureActions(1, onPicked = imports::importPhoto, onFailed = imports::pictureFailed)
         if (imports.sheetOpen) ImportSheet(imports, pictures)
+        val local = imports.localDraft
+        // Cleared before the editor closes, so returning to the list does not open it again.
+        LaunchedEffect(local) { if (local != null) onReviewLocal() }
+        if (imports.unreadable != null) {
+            UnreadableSheet(
+                onReadWithAi = imports::readWithAi,
+                onTypeIn = {
+                    imports.closeUnreadable()
+                    onAdd()
+                },
+                onClose = imports::closeUnreadable,
+            )
+        }
         if (imports.consentFor != null) AiNotice(onAccept = imports::acceptConsent, onNotNow = imports::declineConsent)
         if (imports.paywallOpen) {
             ImportPaywall(
@@ -216,7 +232,7 @@ fun RecipeListScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 // Only when there is something to show, so an empty item adds no gap.
-                if (imports != null && (imports.problem != null || imports.starting || job != null)) {
+                if (imports != null && (imports.problem != null || imports.starting || imports.reading || job != null)) {
                     item(key = "import") {
                         ImportStatus(imports, job, onReview = onReview, onTypeIn = {
                             imports.dismissProblem()
