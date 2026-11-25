@@ -82,6 +82,11 @@ import recipes.shared.generated.resources.import_no_recipe
 import recipes.shared.generated.resources.import_offline_start
 import recipes.shared.generated.resources.import_paywall_body
 import recipes.shared.generated.resources.import_paywall_title
+import recipes.shared.generated.resources.import_photos_free
+import recipes.shared.generated.resources.import_read_with_ai
+import recipes.shared.generated.resources.import_reading_photo
+import recipes.shared.generated.resources.import_unreadable_body
+import recipes.shared.generated.resources.import_unreadable_title
 import recipes.shared.generated.resources.import_ready
 import recipes.shared.generated.resources.import_rejected
 import recipes.shared.generated.resources.import_review
@@ -119,6 +124,7 @@ internal fun ImportStatus(vm: ImportViewModel, job: ImportJobState?, onReview: (
                 }
             }
         }
+        vm.reading -> StatusCard(icon = null, message = stringResource(Res.string.import_reading_photo))
         job == null -> if (vm.starting) RunningCard()
         outcome == null -> if (job.offline) StatusCard(RecipeIcons.CloudOff, stringResource(Res.string.import_waiting_offline)) else RunningCard()
         outcome is ImportOutcome.Done -> StatusCard(
@@ -255,14 +261,14 @@ internal fun ImportSheetContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (firstFree) {
-            Text(
-                stringResource(Res.string.import_first_free),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.clip(MaterialTheme.shapes.small).background(MaterialTheme.colorScheme.secondaryContainer)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-            )
+        Column(
+            Modifier.clip(MaterialTheme.shapes.small).background(MaterialTheme.colorScheme.secondaryContainer)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            val color = MaterialTheme.colorScheme.onSecondaryContainer
+            Text(stringResource(Res.string.import_photos_free), style = MaterialTheme.typography.labelLarge, color = color)
+            if (firstFree) Text(stringResource(Res.string.import_first_free), style = MaterialTheme.typography.labelLarge, color = color)
         }
         OutlinedTextField(
             value = link,
@@ -296,6 +302,47 @@ private fun SourceButton(icon: ImageVector, label: String, onClick: () -> Unit) 
         Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
         Spacer(Modifier.size(8.dp))
         Text(label)
+    }
+}
+
+// ---------- a photo the phone could not read ----------
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun UnreadableSheet(onReadWithAi: () -> Unit, onTypeIn: () -> Unit, onClose: () -> Unit) {
+    ModalBottomSheet(
+        onDismissRequest = onClose,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        UnreadableSheetContent(onReadWithAi, onTypeIn, onClose)
+    }
+}
+
+@Composable
+internal fun UnreadableSheetContent(onReadWithAi: () -> Unit, onTypeIn: () -> Unit, onClose: () -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = PageGutter, end = PageGutter, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            stringResource(Res.string.import_unreadable_title),
+            style = MaterialTheme.typography.headlineSmall,
+            modifier = Modifier.semantics { heading() },
+        )
+        Text(
+            stringResource(Res.string.import_unreadable_body),
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.size(4.dp))
+        Button(onClick = onReadWithAi, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp), shape = MaterialTheme.shapes.medium) {
+            Text(stringResource(Res.string.import_read_with_ai))
+        }
+        SourceButton(RecipeIcons.Edit, stringResource(Res.string.import_type_instead), onTypeIn)
+        TextButton(onClick = onClose, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+            Text(stringResource(Res.string.action_close))
+        }
     }
 }
 

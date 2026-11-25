@@ -12,6 +12,7 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.ui.semantics.heading
@@ -34,6 +35,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.linux.recipes.data.ImportRepository
 import com.linux.recipes.data.ReportReason
+import com.linux.recipes.ui.components.ConfirmDialog
 import com.linux.recipes.ui.components.NoteBanner
 import com.linux.recipes.ui.components.RecipeIcons
 import com.linux.recipes.ui.edit.RecipeEditScreen
@@ -42,6 +44,12 @@ import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.stringResource
 import recipes.shared.generated.resources.Res
 import recipes.shared.generated.resources.action_cancel
+import recipes.shared.generated.resources.edit_discard_keep
+import recipes.shared.generated.resources.import_local_note
+import recipes.shared.generated.resources.import_tidy_up
+import recipes.shared.generated.resources.import_tidy_up_body
+import recipes.shared.generated.resources.import_tidy_up_confirm
+import recipes.shared.generated.resources.import_tidy_up_title
 import recipes.shared.generated.resources.report_action
 import recipes.shared.generated.resources.report_failed
 import recipes.shared.generated.resources.report_note
@@ -95,6 +103,52 @@ fun ReviewImportScreen(
                 scope.launch { reported = imports.report(jobId, reason, note.trim()) }
             },
             onDismiss = { reporting = false },
+        )
+    }
+}
+
+/**
+ * The normal editor on the draft of a photo read on the phone. Saving creates the recipe; nothing was sent, so
+ * there is nothing to report. [onTidyUp] runs after the user confirmed leaving this draft for an AI import.
+ */
+@Composable
+fun ReviewLocalScreen(
+    vm: RecipeEditViewModel,
+    onTidyUp: () -> Unit,
+    onSaved: (String) -> Unit,
+    onClose: () -> Unit,
+) {
+    var confirmTidyUp by rememberSaveable { mutableStateOf(false) }
+    RecipeEditScreen(vm, onSaved, onClose, header = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                stringResource(Res.string.review_hint),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FilledTonalButton(
+                onClick = { confirmTidyUp = true },
+                modifier = Modifier.heightIn(min = 48.dp),
+                shape = MaterialTheme.shapes.medium,
+            ) { Text(stringResource(Res.string.import_tidy_up)) }
+            Text(
+                stringResource(Res.string.import_local_note),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    })
+    if (confirmTidyUp) {
+        ConfirmDialog(
+            title = stringResource(Res.string.import_tidy_up_title),
+            body = stringResource(Res.string.import_tidy_up_body),
+            confirm = stringResource(Res.string.import_tidy_up_confirm),
+            dismiss = stringResource(Res.string.edit_discard_keep),
+            onConfirm = {
+                confirmTidyUp = false
+                onTidyUp()
+            },
+            onDismiss = { confirmTidyUp = false },
         )
     }
 }

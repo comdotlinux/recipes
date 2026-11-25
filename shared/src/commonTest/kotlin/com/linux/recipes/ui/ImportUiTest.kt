@@ -19,6 +19,12 @@ import com.linux.recipes.data.ImportSource
 import com.linux.recipes.data.ImportStart
 import com.linux.recipes.data.ReportReason
 import androidx.compose.runtime.remember
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import androidx.navigation.NavHostController
+import androidx.navigation.compose.rememberNavController
+import com.linux.recipes.data.LocalRead
 import com.linux.recipes.ui.imports.ImportViewModel
 import com.linux.recipes.ui.list.RecipeListScreen
 import com.linux.recipes.ui.list.RecipeListViewModel
@@ -31,6 +37,9 @@ import kotlin.test.assertTrue
 
 private val LOWERCASE_UUID = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 private const val LINK = "https://example.com/pasta-e-ceci"
+private const val PHOTOS_FREE = "Photos are read on your phone, free and unlimited."
+private const val FIRST_FREE = "One AI import is free: a link, or AI help with a photo. After that, AI imports come with Recipes Pro."
+private const val UNREADABLE = "Your phone could not read this picture."
 private const val RUNNING = "Reading your recipe… this can take up to a minute. You can keep using the app."
 
 @OptIn(ExperimentalTestApi::class)
@@ -61,7 +70,8 @@ class ImportUiTest : UiTest() {
         app()
         waitForText("New recipe")
         click("Import")
-        waitForText("Your first import is free.")
+        waitForText(FIRST_FREE)
+        onNodeWithText(PHOTOS_FREE).assertIsDisplayed()
         onNodeWithText("Paste a link to a recipe page, or photograph a recipe from a book or card.").assertIsDisplayed()
         onNodeWithText("Take photo").assertIsDisplayed()
         onNodeWithText("Choose from gallery").assertIsDisplayed()
@@ -74,7 +84,8 @@ class ImportUiTest : UiTest() {
         waitForText("New recipe")
         click("Import")
         waitForText("Choose from gallery")
-        assertTrue(onAllNodesWithText("Your first import is free.").fetchSemanticsNodes().isEmpty())
+        onNodeWithText(PHOTOS_FREE).assertIsDisplayed()
+        assertTrue(onAllNodesWithText(FIRST_FREE).fetchSemanticsNodes().isEmpty())
     }
 
     @Test
@@ -87,22 +98,164 @@ class ImportUiTest : UiTest() {
 
     /** The camera and gallery pickers are platform UI; their results are fed to the view model directly. */
     @Test
-    fun aPhotoIsSentAsAPhotoAndAPictureThatCannotBeUsedSaysSo() = runComposeUiTest {
+    fun aPhotoIsReadOnThePhoneAndAPictureThatCannotBeUsedSaysSo() = runComposeUiTest {
         val imports = FakeImportRepository()
         val vm = ImportViewModel(imports, FakeConsentRepository())
+        var reviews = 0
         setContent {
             RecipesTheme(darkTheme = false) {
-                RecipeListScreen(remember { RecipeListViewModel(FakeRecipeRepository(listOf(shakshuka))) }, {}, {}, {}, imports = vm)
+                RecipeListScreen(remember { RecipeListViewModel(FakeRecipeRepository(listOf(shakshuka))) }, {}, {}, {}, imports = vm, onReviewLocal = { reviews++ })
             }
         }
         waitForText("New recipe")
         runOnIdle { vm.pictureFailed() }
         waitForText("That picture could not be used. Try another one.")
         runOnIdle { vm.importPhoto(byteArrayOf(1, 2, 3)) }
-        waitForText(RUNNING)
-        val photo = imports.starts.single().first
-        assertTrue(photo is ImportSource.Photo && photo.jpeg.contentEquals(byteArrayOf(1, 2, 3)))
+        waitUntil { vm.localDraft != null }
+        waitForIdle()
+        assertEquals(1, reviews)
+        assertTrue(imports.reads.single().contentEquals(byteArrayOf(1, 2, 3)))
+        assertTrue(imports.starts.isEmpty(), "reading a photo sends nothing")
+        assertEquals(LOCAL_TEXT, vm.localDraft?.text)
     }
+
+    /**
+     * The whole app, with a handle on the list's [ImportViewModel] so a test can hand it a picture as the
+     * camera or gallery would.
+     */
+    private fun ComposeUiTest.appWithPhotos(
+        imports: FakeImportRepository = FakeImportRepository(),
+        consent: FakeConsentRepository = FakeConsentRepository(),
+        recipes: FakeRecipeRepository = FakeRecipeRepository(listOf(shakshuka)),
+    ): Pair<Setup, () -> ImportViewModel> {
+        lateinit var nav: NavHostController
+        setContent {
+            RecipesTheme(darkTheme = false) {
+                nav = rememberNavController()
+                RecipesNavHost(FakeSessionRepository(signedIn = true), recipes, imports = imports, consent = consent, nav = nav)
+            }
+        }
+        waitForText("New recipe")
+        val vm = {
+            // The list created it; the factory only runs if it did not.
+            ViewModelProvider.create(nav.getBackStackEntry<ListRoute>(), viewModelFactory { initializer { error("no import view model on the list") } })[ImportViewModel::class]
+        }
+        return Setup(imports, consent, recipes) to vm
+    }
+
+    private val photo = byteArrayOf(-1, -40, -1, 9)
+
+    @Test
+    fun aPhotoReadOnThePhoneOpensTheReviewAndSavesWithoutConsentOrQuota() = runComposeUiTest {
+        val (s, vm) = appWithPhotos(consent = FakeConsentRepository(given = false))
+        runOnIdle { vm().importPhoto(photo) }
+        waitForText("Review import")
+        onNodeWithText("Pfannkuchen").assertIsDisplayed()
+        onNodeWithText("Tidy up with AI").assertIsDisplayed()
+        onNodeWithText("This photo was read on your phone. Nothing was sent.").assertIsDisplayed()
+        assertTrue(onAllNodesWithText("Report a problem with this result").fetchSemanticsNodes().isEmpty(), "nothing was sent, so nothing to report")
+
+        click("Save")
+        waitUntil { s.recipes.saved.isNotEmpty() }
+        val (saved, expectedRev, _) = s.recipes.saved.single()
+        assertEquals(localDraft, saved)
+        assertNull(expectedRev, "a reviewed photo is created, never updated")
+        waitForNoText("Review import")
+        assertTrue(s.imports.reads.single().contentEquals(photo))
+        assertTrue(s.imports.starts.isEmpty())
+        assertEquals(0, s.consent.acceptCalls)
+        assertEquals(0, s.imports.quotaCalls)
+        assertTrue(onAllNodesWithText("Importing with AI.").fetchSemanticsNodes().isEmpty())
+        assertNull(vm().localDraft)
+    }
+
+    @Test
+    fun closingTheLocalReviewAsksFirstAndStaysOnTheList() = runComposeUiTest {
+        val (s, vm) = appWithPhotos()
+        runOnIdle { vm().importPhoto(photo) }
+        waitForText("Review import")
+        onNodeWithContentDescription("Close").performClick()
+        waitForText("Discard this import?")
+        clickDialogConfirm("Discard")
+        waitForText("New recipe")
+        waitForIdle()
+        assertTrue(onAllNodesWithText("Review import").fetchSemanticsNodes().isEmpty(), "the editor does not open again")
+        assertNull(vm().localDraft)
+        assertTrue(s.recipes.saved.isEmpty())
+    }
+
+    @Test
+    fun tidyUpAsksFirstThenGoesThroughTheAiNotice() = runComposeUiTest {
+        val (s, vm) = appWithPhotos(consent = FakeConsentRepository(given = false))
+        runOnIdle { vm().importPhoto(photo) }
+        waitForText("Review import")
+        click("Tidy up with AI")
+        waitForText("Tidy up with AI?")
+        onNodeWithText("AI makes a new draft from the text your phone read. This draft and your changes to it are not kept.").assertIsDisplayed()
+        click("Keep editing")
+        waitForNoText("Tidy up with AI?")
+        onNodeWithText("Review import").assertIsDisplayed()
+        assertEquals(LOCAL_TEXT, vm().localDraft?.text, "the draft is kept until the user confirms")
+
+        click("Tidy up with AI")
+        clickDialogConfirm("Tidy up")
+        waitForText("Importing with AI.")
+        assertTrue(s.imports.starts.isEmpty(), "nothing is sent before the notice is accepted")
+        click("Accept")
+        waitForText(RUNNING)
+        assertEquals(ImportSource.Text(LOCAL_TEXT), s.imports.starts.single().first)
+        assertNull(vm().localDraft)
+    }
+
+    @Test
+    fun tidyUpWithoutImportsLeftShowsThePaywall() = runComposeUiTest {
+        val (s, vm) = appWithPhotos(FakeImportRepository().apply { startResult = ImportStart.QuotaExhausted })
+        runOnIdle { vm().importPhoto(photo) }
+        waitForText("Review import")
+        click("Tidy up with AI")
+        clickDialogConfirm("Tidy up")
+        waitForText("You have used your free import.")
+        assertEquals(ImportSource.Text(LOCAL_TEXT), s.imports.starts.single().first)
+    }
+
+    private fun ComposeUiTest.unreadable(consent: FakeConsentRepository = FakeConsentRepository()): Setup {
+        val (s, vm) = appWithPhotos(FakeImportRepository().apply { readResult = LocalRead.Unreadable }, consent)
+        runOnIdle { vm().importPhoto(photo) }
+        waitForText(UNREADABLE)
+        onNodeWithText("AI can try to read it, for example handwriting. The photo is then sent to our server.").assertIsDisplayed()
+        assertTrue(s.imports.starts.isEmpty())
+        return s
+    }
+
+    @Test
+    fun anUnreadablePhotoCanBeReadWithAiAfterTheNotice() = runComposeUiTest {
+        val s = unreadable(FakeConsentRepository(given = false))
+        click("Read it with AI")
+        waitForText("Importing with AI.")
+        click("Accept")
+        waitForText(RUNNING)
+        val sent = s.imports.starts.single().first
+        assertTrue(sent is ImportSource.Photo && sent.jpeg.contentEquals(photo))
+        assertTrue(onAllNodesWithText(UNREADABLE).fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test
+    fun anUnreadablePhotoCanBeTypedIn() = runComposeUiTest {
+        val s = unreadable()
+        click("Type it in instead")
+        waitForText("Basics")
+        assertTrue(s.imports.starts.isEmpty())
+    }
+
+    @Test
+    fun theUnreadableSheetCloses() = runComposeUiTest {
+        val s = unreadable()
+        click("Close")
+        waitForNoText(UNREADABLE)
+        onNodeWithText("New recipe").assertIsDisplayed()
+        assertTrue(s.imports.starts.isEmpty())
+    }
+
 
     @Test
     fun withoutImportRepositoriesNoImportEntryIsShown() = runComposeUiTest {

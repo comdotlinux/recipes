@@ -26,6 +26,9 @@ import com.linux.recipes.ui.imports.ImportPaywallContent
 import com.linux.recipes.ui.imports.ImportSheetContent
 import com.linux.recipes.ui.imports.ImportViewModel
 import com.linux.recipes.ui.imports.ReviewImportScreen
+import com.linux.recipes.ui.imports.ReviewLocalScreen
+import com.linux.recipes.ui.imports.UnreadableSheetContent
+import com.linux.recipes.ui.localDraft
 import com.linux.recipes.ui.FakeSessionRepository
 import com.linux.recipes.ui.detail.RecipeDetailScreen
 import com.linux.recipes.ui.detail.RecipeDetailViewModel
@@ -173,6 +176,14 @@ class AppScreenshotTest : UiTest() {
     }
 
     @Test
+    fun importReviewLocal() = both("import_review_local") {
+        ReviewLocalScreen(remember { RecipeEditViewModel(recipes(), null, "en", localDraft) }, {}, {}, {})
+    }
+
+    @Test
+    fun importUnreadable() = both("import_unreadable") { OnSheet { UnreadableSheetContent({}, {}, {}) } }
+
+    @Test
     fun importPaywall() = both("import_paywall") { OnSheet { ImportPaywallContent({}, {}) } }
 
     /** 200 % font on the import screens. */
@@ -186,5 +197,9 @@ class AppScreenshotTest : UiTest() {
         shot("large_font_import_sheet", dark = false, before = {}) {
             OnSheet { ImportSheetContent("", {}, firstFree = true, {}, {}, {}) }
         }
+        shot("large_font_import_review_local", dark = false, before = {}) {
+            ReviewLocalScreen(remember { RecipeEditViewModel(recipes(), null, "en", localDraft) }, {}, {}, {})
+        }
+        shot("large_font_import_unreadable", dark = false, before = {}) { OnSheet { UnreadableSheetContent({}, {}, {}) } }
     }
 }
