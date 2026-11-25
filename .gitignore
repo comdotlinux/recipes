@@ -32,3 +32,6 @@ xcuserdata/
 *.xcuserstate
 .idea/
 .DS_Store
+
+# Agent worktrees and local agent state
+.claude/worktrees/
