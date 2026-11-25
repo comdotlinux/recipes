@@ -11,7 +11,7 @@ const PROMPT = [
 
 const Answer = z.object({ is_recipe: z.boolean(), text: z.string().max(MAX_TEXT_CHARS) });
 
-function base64(bytes: ArrayBuffer): string {
+export function base64(bytes: ArrayBuffer): string {
 	const view = new Uint8Array(bytes);
 	let binary = "";
 	for (let i = 0; i < view.length; i += 0x8000) binary += String.fromCharCode(...view.subarray(i, i + 0x8000));

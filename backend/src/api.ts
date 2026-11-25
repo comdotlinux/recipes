@@ -16,7 +16,8 @@ import { ALLOWED_MIME, MAX_IMAGE_BYTES, sniffImage } from "./images";
 import { TRANSLATION_LANGUAGES } from "./ai/translate";
 import { systemEvent } from "./metrics";
 import { ID_PATTERN, MAX_RECIPE_BYTES, RecipeInput, isId } from "./recipes";
-import type { UserDO } from "./user-do";
+import { SHARE_ID, openShareToken } from "./share";
+import { type UserDO, userNamespace } from "./user-do";
 
 export type TestProvider = (idToken: string, nonce: string) => Promise<{ sub: string } | null>;
 
@@ -72,6 +73,11 @@ type UserObject = Pick<
 	| "startImport"
 	| "getJob"
 	| "startTranslation"
+	| "createShare"
+	| "deleteShare"
+	| "previewShare"
+	| "acceptShare"
+	| "reportShare"
 	| "report"
 	| "refreshFromClient"
 	| "entitlementChanged"
@@ -114,7 +120,7 @@ async function webhookAuthorized(header: string | undefined, secret: string | un
 
 /** The only way to an object: the user id comes from the authenticated token, never from the client. */
 const userObject = (env: Env, userId: string): UserObject => {
-	const ns = env.DO_JURISDICTION ? env.USER_DO.jurisdiction(env.DO_JURISDICTION) : env.USER_DO;
+	const ns = userNamespace(env);
 	return ns.get(ns.idFromName(userId)) as unknown as UserObject;
 };
 
@@ -370,12 +376,52 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 		}),
 	);
 
-	const ReportBody = z.strictObject({
-		kind: z.enum(["import_result", "translation"]),
-		jobId: z.string().regex(ID_PATTERN),
-		reason: z.enum(["wrong_content", "offensive", "other"]),
-		note: z.string().max(1000).optional(),
-	});
+	/** The share token from the path, opened here: one that does not authenticate is a 404 before any object is used. */
+	const sharedBy = async (c: C, token: string) => {
+		const opened = await openShareToken(token, c.env);
+		if (!opened) systemEvent(c.env, { event: "auth_failure", reason: "share_token" });
+		return opened;
+	};
+	const SHARE_NOT_FOUND = error(404, "not_found", "no such share");
+
+	// docs/api.md "Milestone M5": sharing a recipe by link.
+	app.post(
+		"/v1/recipes/:id/shares",
+		authed(async (o, a, c) => {
+			if (!ids(c, "id")) return error(400, "invalid_id", "id must be a lowercase UUID");
+			const result = await o.createShare(a.secretHash, c.req.param("id")!);
+			if (result.status !== 201) return result;
+			const body = result.body as { token: string };
+			return { ...result, body: { ...body, url: `${new URL(c.req.url).origin}/s/${body.token}` } };
+		}),
+	);
+
+	app.delete(
+		"/v1/shares/:shareId",
+		authed(async (o, a, c) => (SHARE_ID.test(c.req.param("shareId")!) ? o.deleteShare(a.secretHash, c.req.param("shareId")!) : error(400, "invalid_id", "not a share id"))),
+	);
+
+	app.get(
+		"/v1/shares/:token",
+		authed(async (o, a, c) => {
+			const share = await sharedBy(c, c.req.param("token")!);
+			return share ? o.previewShare(a.secretHash, share.ownerId, share.shareId) : SHARE_NOT_FOUND;
+		}),
+	);
+
+	app.post(
+		"/v1/shares/:token/accept",
+		authed(async (o, a, c) => {
+			const share = await sharedBy(c, c.req.param("token")!);
+			return share ? o.acceptShare(a.secretHash, share.ownerId, share.shareId) : SHARE_NOT_FOUND;
+		}),
+	);
+
+	const Reason = z.enum(["wrong_content", "offensive", "other"]);
+	const ReportBody = z.discriminatedUnion("kind", [
+		z.strictObject({ kind: z.enum(["import_result", "translation"]), jobId: z.string().regex(ID_PATTERN), reason: Reason, note: z.string().max(1000).optional() }),
+		z.strictObject({ kind: z.literal("share"), shareToken: z.string().max(200), reason: Reason, note: z.string().max(1000).optional() }),
+	]);
 
 	app.post(
 		"/v1/reports",
@@ -384,7 +430,11 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 			if ("fail" in body) return body.fail;
 			const parsed = ReportBody.safeParse(body.value);
 			if (!parsed.success) return error(400, "invalid_body", "body does not match Report");
-			return o.report(a.secretHash, { ...parsed.data, note: parsed.data.note ?? "" });
+			const r = parsed.data;
+			if (r.kind !== "share") return o.report(a.secretHash, { kind: r.kind, jobId: r.jobId, reason: r.reason, note: r.note ?? "" });
+			const share = await sharedBy(c, r.shareToken);
+			if (!share) return SHARE_NOT_FOUND;
+			return o.reportShare(a.secretHash, share.ownerId, share.shareId, r.reason, r.note ?? "");
 		}),
 	);
 

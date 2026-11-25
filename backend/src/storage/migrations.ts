@@ -43,6 +43,16 @@ export const MIGRATIONS: Migration[] = [
 			"CREATE TABLE translations (recipe_id TEXT NOT NULL, lang TEXT NOT NULL, stale INTEGER NOT NULL DEFAULT 0, json TEXT NOT NULL, PRIMARY KEY (recipe_id, lang))",
 		);
 	},
+	// v5 (M5): share links and their recipients (a hash of each recipient's user id, never the id itself)
+	(sql) => {
+		sql.exec(
+			"CREATE TABLE shares (share_id TEXT PRIMARY KEY, recipe_id TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)",
+		);
+		sql.exec("CREATE INDEX shares_created ON shares (created_at)");
+		sql.exec(
+			"CREATE TABLE share_accepts (share_id TEXT NOT NULL, recipient_hash TEXT NOT NULL, accepted_at INTEGER NOT NULL, PRIMARY KEY (share_id, recipient_hash))",
+		);
+	},
 ];
 
 // GLOB, not LIKE: "_" is a wildcard in LIKE. _cf_* tables are internal to the runtime.

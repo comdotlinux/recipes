@@ -1,13 +1,16 @@
 import { DurableObject } from "cloudflare:workers";
 import { type Result, error } from "./http";
 import { FREE_CAP_BYTES, SUBSCRIBER_CAP_BYTES } from "./images";
-import { userEvent } from "./metrics";
-import { MAX_IMAGES_PER_RECIPE, MAX_RECIPES, type RecipeInput, type TranslationView, isoTime, toRecipe } from "./recipes";
+import { systemEvent, userEvent } from "./metrics";
+import { MAX_IMAGES_PER_RECIPE, MAX_RECIPES, RecipeInput, type TranslationView, isoTime, stripControls, toRecipe } from "./recipes";
+import { SHARES_PER_DAY, SHARE_RECIPIENT_LIMIT, SHARE_TTL_MS, derivedId, newShareId, newShareToken, reportReference } from "./share";
+import { sha256Hex } from "./auth/encoding";
 import { migrate, rowCounts, schemaVersion } from "./storage/migrations";
 import { armAlarm, runDueTasks, schedule } from "./storage/tasks";
 import { fetchPage } from "./ai/fetch-url";
 import { AI_NOTICE_VERSION, ConsentRequired, type ModelRunner } from "./ai/gateway";
 import { type ImportOutcome, structureRecipe } from "./ai/structure";
+import { screenImage } from "./ai/screen-image";
 import { transcribePhoto } from "./ai/transcribe";
 import { type TranslateOutcome, type TranslationLanguage, translateRecipe } from "./ai/translate";
 import { type Entitlement, type EntitlementSource, NONE, endOf, revenueCat } from "./billing/revenuecat";
@@ -53,6 +56,31 @@ const OPEN = ["pending", "running"];
 const month = (ms: number) => new Date(ms).toISOString().slice(0, 7);
 
 type RecipeRow = { id: string; rev: number; deleted: number; updated_at: number; json: string | null };
+type ShareRow = { share_id: string; recipe_id: string; created_at: number; expires_at: number; revoked: number };
+type SharedImage = { id: string; mime: string; bytes: ArrayBuffer };
+
+/** The users' objects, pinned to the configured jurisdiction. The only way to address an object by user id. */
+export const userNamespace = (env: Env) => (env.DO_JURISDICTION ? env.USER_DO.jurisdiction(env.DO_JURISDICTION) : env.USER_DO);
+
+/** What another user's request may call on an owner's object: exactly these three (plan 4.4). */
+type OwnerCalls = Pick<UserDO, "readShare" | "reserveAccept" | "revokeShare">;
+
+/** The shared recipe's text with control and bidirectional characters removed; empty items, steps and tags dropped. */
+function sharedText(json: string) {
+	const r = JSON.parse(json) as RecipeInput;
+	const t = (v: string) => stripControls(v).trim();
+	return {
+		title: t(r.title),
+		description: t(r.description),
+		servings: r.servings,
+		prepMinutes: r.prepMinutes,
+		cookMinutes: r.cookMinutes,
+		ingredients: r.ingredients.map((i) => ({ quantity: t(i.quantity), unit: t(i.unit), item: t(i.item), group: i.group === null ? null : t(i.group) })).filter((i) => i.item),
+		steps: r.steps.map(t).filter((v) => v),
+		tags: r.tags.map(t).filter((v) => v),
+		language: r.language,
+	};
+}
 
 const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
@@ -307,8 +335,9 @@ export class UserDO extends DurableObject<Env> {
 			if (count >= MAX_IMAGES_PER_RECIPE) return error(409, "image_limit", `at most ${MAX_IMAGES_PER_RECIPE} images per recipe`);
 			// A lapsed subscriber above the free cap keeps everything; only new uploads are refused (plan 4.6, AC8).
 			if (this.usedBytes(imageId) + bytes.byteLength > this.capBytes(subscribed)) return error(413, "storage_cap", "storage cap reached");
+			// New bytes under the same id must be screened again before they are shared.
 			this.sql.exec(
-				"INSERT INTO images (id, recipe_id, mime, bytes, size) VALUES (?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET mime = excluded.mime, bytes = excluded.bytes, size = excluded.size",
+				"INSERT INTO images (id, recipe_id, mime, bytes, size) VALUES (?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET mime = excluded.mime, bytes = excluded.bytes, size = excluded.size, screened_ok = NULL",
 				imageId,
 				recipeId,
 				mime,
@@ -615,6 +644,252 @@ export class UserDO extends DurableObject<Env> {
 		if (job && OPEN.includes(job.status)) this.finish(job, { status: "failed" }, now);
 	}
 
+	// ---- sharing (plan 4.4, docs/api.md Milestone M5) ----
+
+	private liveRecipe(id: string): RecipeRow | undefined {
+		return this.sql.exec<RecipeRow>("SELECT id, rev, deleted, updated_at, json FROM recipes WHERE id = ? AND deleted = 0", id).toArray()[0];
+	}
+
+	private sharesToday(now: number): number {
+		return this.sql.exec<{ n: number }>("SELECT count(*) AS n FROM shares WHERE created_at >= ?", Date.parse(day(now))).one().n;
+	}
+
+	/** The recipe's pictures that passed the share-time check, in display order; only those are ever shared. */
+	private sharedPictureIds(recipe: RecipeInput): string[] {
+		return recipe.imageIds.filter((id) => this.sql.exec("SELECT 1 FROM images WHERE id = ? AND recipe_id = ? AND screened_ok = 1", id, recipe.id).toArray().length);
+	}
+
+	/** POST /recipes/:id/shares: owner, subscriber, at most SHARES_PER_DAY a day. */
+	createShare(secretHash: string, recipeId: string): Promise<Result> {
+		return this.run("shares", secretHash, async (now) => {
+			const subscribed = await this.entitledNow(now);
+			if (!this.liveRecipe(recipeId)) return error(404, "not_found", "recipe not found");
+			if (!subscribed) {
+				this.event({ event: "share", outcome: "subscription_required" });
+				return error(402, "subscription_required", "sharing needs the subscription");
+			}
+			if (this.sharesToday(now) >= SHARES_PER_DAY) {
+				this.event({ event: "share", outcome: "share_limit" });
+				return error(429, "share_limit", `at most ${SHARES_PER_DAY} new links a day`);
+			}
+			const screened = await this.screenPictures(recipeId);
+			if (screened) return screened;
+			// Checked again after the awaits above; from here on everything runs in one step.
+			if (!this.liveRecipe(recipeId)) return error(404, "not_found", "recipe not found");
+			if (this.sharesToday(now) >= SHARES_PER_DAY) return error(429, "share_limit", `at most ${SHARES_PER_DAY} new links a day`);
+			const shareId = newShareId();
+			const expiresAt = now + SHARE_TTL_MS;
+			this.sql.exec("INSERT INTO shares (share_id, recipe_id, created_at, expires_at) VALUES (?, ?, ?, ?)", shareId, recipeId, now, expiresAt);
+			await this.scheduleExpiry(expiresAt);
+			this.event({ event: "share", outcome: "created" });
+			return { status: 201, body: { shareId, token: await newShareToken(this.ctx.id.name!, shareId, this.env), expiresAt: isoTime(expiresAt) } };
+		}, true);
+	}
+
+	/**
+	 * Share-time picture check (plan 4.5): every listed picture not checked yet goes to the model once, and the result is
+	 * kept with the picture. Null when the recipe may be shared, otherwise the answer to give.
+	 */
+	private async screenPictures(recipeId: string): Promise<Result | null> {
+		const recipe = JSON.parse(this.liveRecipe(recipeId)!.json!) as RecipeInput;
+		if (recipe.imageIds.length === 0) return null;
+		// Only a recipe with pictures makes a model call, so only then is consent needed (AC12).
+		if (this.consentVersion() !== AI_NOTICE_VERSION) return error(403, "consent_required", "accept the AI notice first");
+		const picture = (id: string) =>
+			this.sql
+				.exec<{ mime: string; bytes: ArrayBuffer; screened_ok: number | null }>("SELECT mime, bytes, screened_ok FROM images WHERE id = ? AND recipe_id = ?", id, recipeId)
+				.toArray()[0];
+		for (const id of recipe.imageIds) {
+			const image = picture(id);
+			if (!image || image.screened_ok !== null) continue;
+			// Its own global key, so share checks cannot use up the ceiling that paid imports depend on.
+			if (!(await this.env.RL_GLOBAL.limit({ key: "screen-image" })).success) {
+				systemEvent(this.env, { event: "rate_limited", route: "screen-image" });
+				return error(429, "rate_limited", "picture checks are busy; try again later");
+			}
+			let safe: boolean;
+			try {
+				safe = await screenImage(this.models(), () => this.consentVersion(), image.bytes, image.mime);
+			} catch (e) {
+				if (e instanceof ConsentRequired) return error(403, "consent_required", "accept the AI notice first");
+				this.event({ event: "screen", outcome: "unavailable" });
+				return error(503, "screening_unavailable", "the picture check is not available; try again later");
+			}
+			// Only for the bytes that were checked: a picture replaced meanwhile stays unchecked.
+			this.sql.exec("UPDATE images SET screened_ok = ? WHERE id = ? AND bytes = ?", safe ? 1 : 0, id, image.bytes);
+			this.event({ event: "screen", outcome: safe ? "safe" : "not_safe" });
+		}
+		if (recipe.imageIds.some((id) => picture(id)?.screened_ok === 0)) {
+			this.event({ event: "share", outcome: "picture_rejected" });
+			return error(422, "picture_rejected", "a picture of this recipe cannot be shared");
+		}
+		return null;
+	}
+
+	/** DELETE /shares/:shareId: the owner revokes a link; a revoked link answers 410 to everyone. */
+	deleteShare(secretHash: string, shareId: string): Promise<Result> {
+		return this.run("shares", secretHash, () => {
+			if (this.sql.exec("UPDATE shares SET revoked = 1 WHERE share_id = ?", shareId).rowsWritten === 0) return error(404, "not_found", "share not found");
+			this.event({ event: "share", outcome: "revoked" });
+			return { status: 204 };
+		}, true);
+	}
+
+	/**
+	 * The share if it can be used now: an unknown share is 404; an expired or revoked one, a deleted recipe or an owner who
+	 * is not active is 410. An object without tables (no account) answers 404 and stays without tables.
+	 */
+	private usableShare(shareId: string, now: number): { share: ShareRow; recipe: RecipeInput } | Result {
+		if (schemaVersion(this.sql) === 0) return error(404, "not_found", "share not found");
+		const share = this.sql.exec<ShareRow>("SELECT * FROM shares WHERE share_id = ?", shareId).toArray()[0];
+		if (!share) return error(404, "not_found", "share not found");
+		const row = this.liveRecipe(share.recipe_id);
+		if (this.meta("state") !== "active" || share.revoked || share.expires_at <= now || !row) {
+			this.event({ event: "share", outcome: "gone" });
+			return error(410, "share_gone", "the link expired or was revoked");
+		}
+		return { share, recipe: JSON.parse(row.json!) as RecipeInput };
+	}
+
+	private acceptedBy(shareId: string, recipientHash: string): boolean {
+		return this.sql.exec("SELECT 1 FROM share_accepts WHERE share_id = ? AND recipient_hash = ?", shareId, recipientHash).toArray().length > 0;
+	}
+
+	private overRecipientLimit(shareId: string, recipientHash: string): boolean {
+		if (this.acceptedBy(shareId, recipientHash)) return false;
+		return this.sql.exec<{ n: number }>("SELECT count(*) AS n FROM share_accepts WHERE share_id = ?", shareId).one().n >= SHARE_RECIPIENT_LIMIT;
+	}
+
+	/** Owner call 1 of 3, for another user: the preview of one shared recipe. */
+	readShare(shareId: string, recipientHash: string): Result {
+		const usable = this.usableShare(shareId, Date.now());
+		if ("status" in usable) return usable;
+		if (this.overRecipientLimit(shareId, recipientHash)) return error(410, "share_gone", "the link reached its recipient limit");
+		const { title, description, servings, prepMinutes, cookMinutes, ingredients, steps, tags, language } = sharedText(JSON.stringify(usable.recipe));
+		return {
+			status: 200,
+			body: {
+				recipe: { title, description, servings, prepMinutes, cookMinutes, ingredients, steps, tags, language },
+				imageCount: this.sharedPictureIds(usable.recipe).length,
+				expiresAt: isoTime(usable.share.expires_at),
+			},
+		};
+	}
+
+	/**
+	 * Owner call 2 of 3, for another user: counts the recipient (atomic, keyed by the hash of the recipient's user id,
+	 * so a retry does not count twice and a race cannot pass the limit) and hands out the recipe and its screened pictures.
+	 */
+	reserveAccept(shareId: string, recipientHash: string): Result {
+		const now = Date.now();
+		const usable = this.usableShare(shareId, now);
+		if ("status" in usable) return usable;
+		if (this.overRecipientLimit(shareId, recipientHash)) {
+			this.event({ event: "share", outcome: "recipient_limit" });
+			return error(410, "share_gone", "the link reached its recipient limit");
+		}
+		this.sql.exec("INSERT INTO share_accepts (share_id, recipient_hash, accepted_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING", shareId, recipientHash, now);
+		const images = this.sharedPictureIds(usable.recipe).map((id) => this.sql.exec<SharedImage>("SELECT id, mime, bytes FROM images WHERE id = ?", id).one());
+		return { status: 200, body: { recipe: JSON.stringify(usable.recipe), images } };
+	}
+
+	/** Owner call 3 of 3, for another user's report: revokes the link. */
+	revokeShare(shareId: string): Result {
+		if (schemaVersion(this.sql) === 0) return error(404, "not_found", "share not found");
+		if (this.sql.exec("UPDATE shares SET revoked = 1 WHERE share_id = ?", shareId).rowsWritten === 0) return error(404, "not_found", "share not found");
+		this.event({ event: "share", outcome: "reported" });
+		return { status: 204 };
+	}
+
+	private owner(ownerId: string): OwnerCalls {
+		const ns = userNamespace(this.env);
+		return ns.get(ns.idFromName(ownerId)) as unknown as OwnerCalls;
+	}
+
+	/** GET /shares/:token for the signed-in recipient: authenticated here first, then the owner is asked. */
+	previewShare(secretHash: string, ownerId: string, shareId: string): Promise<Result> {
+		return this.run("shares", secretHash, async () => {
+			const me = this.ctx.id.name!;
+			if (ownerId === me) return error(409, "own_share", "this is your own link");
+			return this.owner(ownerId).readShare(shareId, await sha256Hex(me));
+		});
+	}
+
+	/**
+	 * POST /shares/:token/accept: an independent copy in the recipient's storage, with an id derived from the share and
+	 * the recipient. A repeat returns the existing copy untouched. The copy counts against the recipient's caps; when
+	 * it does not fit, nothing is copied.
+	 */
+	acceptShare(secretHash: string, ownerId: string, shareId: string): Promise<Result> {
+		return this.run("shares", secretHash, async (now) => {
+			const me = this.ctx.id.name!;
+			if (ownerId === me) return error(409, "own_share", "this is your own link");
+			const copyId = await derivedId(`${shareId}:${me}`);
+			const existing = this.liveRecipe(copyId);
+			if (existing) {
+				this.event({ event: "share", outcome: "accept_existing" });
+				return { status: 200, body: this.recipeViews([existing])[0] };
+			}
+			const subscribed = await this.entitledNow(now);
+			const reserved = await this.owner(ownerId).reserveAccept(shareId, await sha256Hex(me));
+			if (reserved.status !== 200) return reserved;
+			const { recipe, images } = reserved.body as { recipe: string; images: SharedImage[] };
+			const imageIds = await Promise.all(images.map((i) => derivedId(`${copyId}:${i.id}`)));
+			// No await below: the checks and every write form one step, so a copy is never partial.
+			const raced = this.liveRecipe(copyId);
+			if (raced) return { status: 200, body: this.recipeViews([raced])[0] };
+			const copy = RecipeInput.safeParse({ id: copyId, ...sharedText(recipe), sourceUrl: null, sourceType: "shared", imageIds });
+			if (!copy.success) return error(422, "share_unreadable", "the shared recipe has no readable text");
+			if (this.sql.exec<{ n: number }>("SELECT count(*) AS n FROM recipes WHERE deleted = 0").one().n >= MAX_RECIPES) {
+				return error(409, "recipe_limit", `at most ${MAX_RECIPES} recipes`);
+			}
+			const json = JSON.stringify(copy.data);
+			const total = this.recipeBytes();
+			if (total + utf8Length(json) > RECIPE_STORAGE_CAP) return error(413, "recipe_storage_cap", "stored recipe text would exceed 20 MB");
+			const added = images.reduce((n, i) => n + i.bytes.byteLength, 0);
+			if (added > 0 && this.usedBytes() + added > this.capBytes(subscribed)) return error(413, "storage_cap", "storage cap reached");
+			images.forEach((image, n) =>
+				this.sql.exec(
+					"INSERT INTO images (id, recipe_id, mime, bytes, size, screened_ok) VALUES (?, ?, ?, ?, ?, 1) ON CONFLICT (id) DO UPDATE SET recipe_id = excluded.recipe_id, mime = excluded.mime, bytes = excluded.bytes, size = excluded.size, screened_ok = 1",
+					imageIds[n],
+					copyId,
+					image.mime,
+					image.bytes,
+					image.bytes.byteLength,
+				),
+			);
+			const rev = this.nextRev();
+			this.sql.exec(
+				"INSERT INTO recipes (id, rev, deleted, updated_at, json) VALUES (?, ?, 0, ?, ?) ON CONFLICT (id) DO UPDATE SET rev = excluded.rev, deleted = 0, updated_at = excluded.updated_at, json = excluded.json",
+				copyId,
+				rev,
+				now,
+				json,
+			);
+			this.setMeta("recipe_bytes", String(total + utf8Length(json)));
+			this.event({ event: "share", outcome: "accepted" });
+			return { status: 200, body: this.recipeViews([{ id: copyId, rev, deleted: 0, updated_at: now, json }])[0] };
+		}, true);
+	}
+
+	/** POST /reports with kind "share": recorded here, and the owner's link is revoked. */
+	reportShare(secretHash: string, ownerId: string, shareId: string, reason: string, note: string): Promise<Result> {
+		return this.run("reports", secretHash, async (now) => {
+			if (ownerId === this.ctx.id.name) return error(409, "own_share", "this is your own link");
+			const revoked = await this.owner(ownerId).revokeShare(shareId);
+			if (revoked.status !== 204) return revoked;
+			// One report per share and reporter; a repeat changes nothing.
+			if (!this.sql.exec("SELECT 1 FROM reports WHERE job_key = ? AND kind = 'share'", shareId).toArray().length) {
+				this.sql.exec("INSERT INTO reports (at, kind, job_key, reason, note) VALUES (?, 'share', ?, ?, ?)", now, shareId, reason, note);
+				this.event({ event: "report", kind: "share", reason });
+				// The operator learns which account was reported only through this reference (plan 4.10).
+				systemEvent(this.env, { event: "share_report", reason, reference: await reportReference(ownerId, now, this.env) });
+				await this.scheduleExpiry(now + REPORT_DAYS * DAY_MS);
+			}
+			return { status: 204 };
+		}, true);
+	}
+
 	// ---- subscription (plan 4.6) ----
 
 	private storedEntitlement(): Entitlement {
@@ -718,6 +993,8 @@ export class UserDO extends DurableObject<Env> {
 		this.sql.exec("DELETE FROM attempts WHERE day < ?", day(now - DAY_MS));
 		this.sql.exec("DELETE FROM jobs WHERE created_at <= ? AND status NOT IN ('pending', 'running')", now - JOB_RESULT_DAYS * DAY_MS);
 		this.sql.exec("DELETE FROM reports WHERE at <= ?", now - REPORT_DAYS * DAY_MS);
+		this.sql.exec("DELETE FROM share_accepts WHERE share_id IN (SELECT share_id FROM shares WHERE expires_at <= ?)", now);
+		this.sql.exec("DELETE FROM shares WHERE expires_at <= ?", now);
 		const horizon = now - MARKER_TTL_MS;
 		const purged = this.sql.exec<{ rev: number | null }>("SELECT max(rev) AS rev FROM recipes WHERE deleted = 1 AND updated_at <= ?", horizon).one().rev;
 		if (purged !== null) {
@@ -738,7 +1015,10 @@ export class UserDO extends DurableObject<Env> {
 				REPORT_DAYS * DAY_MS,
 			)
 			.one().at;
-		if (next !== null) await schedule(this.ctx.storage, { id: "expiry", kind: "expiry", dueAt: next });
+		// A separate query: the runtime's SQLite allows at most five terms in one compound SELECT.
+		const share = this.sql.exec<{ at: number | null }>("SELECT min(expires_at) AS at FROM shares").one().at;
+		const due = next === null ? share : share === null ? next : Math.min(next, share);
+		if (due !== null) await schedule(this.ctx.storage, { id: "expiry", kind: "expiry", dueAt: due });
 	}
 
 	async alarm(): Promise<void> {

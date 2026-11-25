@@ -10,7 +10,10 @@ export type UserEvent =
 	| { event: "quota_denied"; reason: string }
 	| { event: "report"; kind: string; reason: string }
 	// trigger: webhook | client | stale | daily | local; outcome: active | inactive | unavailable | gave_up
-	| { event: "entitlement_refresh"; trigger: string; outcome: string };
+	| { event: "entitlement_refresh"; trigger: string; outcome: string }
+	// share: created | revoked | reported | accepted | accept_existing | gone | ...; pdf: rendered | limited | unavailable;
+	// screen: safe | not_safe | unavailable. Codes only.
+	| { event: "share" | "pdf" | "screen"; outcome: string };
 
 /** No content, no URLs, no user text: only the event, fixed codes and a duration. */
 export function userEvent(env: Env, metricsId: string, e: UserEvent): void {
@@ -25,7 +28,9 @@ export function userEvent(env: Env, metricsId: string, e: UserEvent): void {
 						? [e.event, e.kind, e.reason]
 						: e.event === "entitlement_refresh"
 							? [e.event, e.trigger, e.outcome]
-							: [e.event];
+							: e.event === "share" || e.event === "pdf" || e.event === "screen"
+								? [e.event, e.outcome]
+								: [e.event];
 	env.METRICS.writeDataPoint({ indexes: [metricsId], blobs, doubles: [e.event === "import_outcome" ? e.durationMs : 1] });
 }
 
@@ -34,9 +39,15 @@ export type SystemEvent =
 	| { event: "rate_limited"; route: string }
 	| { event: "provider_unavailable"; provider: string }
 	// type: one of the known RevenueCat event types or "OTHER"; never the user id or anything else from the payload.
-	| { event: "billing_webhook"; type: string };
+	| { event: "billing_webhook"; type: string }
+	// The reported account only as an encrypted reference (share.ts reportReference), never its user id (plan 4.10).
+	| { event: "share_report"; reason: string; reference: string };
 
 export function systemEvent(env: Env, e: SystemEvent): void {
+	if (e.event === "share_report") {
+		env.METRICS.writeDataPoint({ blobs: [e.event, e.reason, e.reference], doubles: [1] });
+		return;
+	}
 	const detail = e.event === "auth_failure" ? e.reason : e.event === "rate_limited" ? e.route : e.event === "billing_webhook" ? e.type : e.provider;
 	env.METRICS.writeDataPoint({ blobs: [e.event, detail], doubles: [1] });
 }

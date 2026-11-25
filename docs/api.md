@@ -291,6 +291,49 @@ Rules:
 - `POST /reports` accepts `"kind": "translation"` with the translation job's id (same body as an import report).
 - `GET /me` `openJobId` names the open job of either kind.
 
+## Milestone M5
+
+### Sharing by link
+
+Only a subscriber can create a link (402 `subscription_required` otherwise). Anyone signed in can open a link and accept it. Accepting copies the recipe, with its pictures, into the recipient's own recipes; the copy is independent of the original from then on.
+
+| Route | Request | Success | Errors |
+|-------|---------|---------|--------|
+| `POST /recipes/:id/shares` | none | 201 `ShareCreated` | 400 `invalid_id`; 402 `subscription_required`; 403 `consent_required` (only when the recipe has pictures: they are checked by the model first); 404 (not this user's recipe); 422 `picture_rejected` (a picture failed the check; the app says which recipe and asks to remove the picture); 429 `share_limit` (10 new links per UTC day); 429 `rate_limited`; 503 `screening_unavailable` (try again later) |
+| `DELETE /shares/:shareId` | none | 204 | 400 `invalid_id`; 404 (not this user's share) |
+| `GET /shares/:shareToken` | none | 200 `SharePreview` | 404 `not_found` (not a valid link, or unknown); 409 `own_share`; 410 `share_gone` |
+| `POST /shares/:shareToken/accept` | none | 200 `Recipe` (the copy) | 404; 409 `own_share`; 409 `recipe_limit`; 410 `share_gone`; 413 `recipe_storage_cap`; 413 `storage_cap`; 422 `share_unreadable` (no readable text left, see below) |
+| `POST /reports` | `ShareReport` | 204 | 400 `invalid_body`; 404; 409 `own_share`; 410 `share_gone` |
+
+```jsonc
+// ShareCreated
+{
+  "shareId": "3f2a9c4d5e6b7a8f9c0d1e2f3a4b5c6d",   // the owner's handle for DELETE; 32 lowercase hex characters
+  "token": "<107 base64url characters>",          // the public value in the link
+  "expiresAt": "2026-12-25T10:00:00Z",           // 30 days after creation
+  "url": "https://<this host>/s/<token>"          // what the app hands to the share sheet
+}
+// SharePreview: the recipe's text only, never pictures or anything else of the owner
+{
+  "recipe": { "title": "...", "description": "", "servings": 4, "prepMinutes": 20, "cookMinutes": 25,
+              "ingredients": [ ... ], "steps": [ ... ], "tags": [ ... ], "language": "de" },
+  "imageCount": 1,                                // pictures the copy will get
+  "expiresAt": "2026-12-25T10:00:00Z"
+}
+// ShareReport
+{ "kind": "share", "shareToken": "<token>", "reason": "offensive", "note": "" }   // reason and note as in Report
+```
+
+Rules:
+- The link is `https://<host>/s/<token>`. The app takes the token from the path (Android App Link, iOS Universal Link, or pasted) and calls `GET /shares/:token`, then `POST /shares/:token/accept` when the user confirms. The token is opaque to the app.
+- A token that is not genuine answers 404 without reaching anyone's data. A link that expired (30 days), was revoked by its owner or by a report, whose recipe was deleted, whose owner's account is suspended or being deleted, or that already has 10 distinct recipients answers 410 `share_gone` (a recipient who already accepted still gets their copy).
+- Accept is keyed by recipient: the copy has a fixed id derived from the link and the recipient, so repeating the accept returns the existing copy unchanged, including the recipient's own edits since. If the recipient deleted the copy, the next accept creates it again.
+- The copy has `sourceType: "shared"`, `sourceUrl: null`, new picture ids, and the text with control and bidirectional characters removed (empty ingredients, steps and tags dropped). If no title is left after that, the accept answers 422 `share_unreadable`.
+- The copy counts against the recipient's limits: recipe count (409 `recipe_limit`), recipe text (413 `recipe_storage_cap`) and picture storage (413 `storage_cap`). When it does not fit, nothing is copied; the app tells the user to free space and try again.
+- Pictures: when a link is created, every picture of the recipe that has not been checked yet is checked once by a vision model (safe or not); a picture with new bytes is checked again. Only pictures that passed are ever shared, so a picture added to the recipe after the link was made is not part of the copy until a new link is made. A recipe without pictures needs no AI consent to be shared.
+- A report of a shared recipe revokes the link at once. Reporting the same link again answers 204 and changes nothing.
+- The response of `POST /recipes/:id/shares` is the only time the app sees the token; the owner keeps `shareId` to revoke the link. There is no list of an owner's links in this milestone.
+
 ## Module boundaries
 
 These signatures let people work on both sides at once. Change them only together with this section.
