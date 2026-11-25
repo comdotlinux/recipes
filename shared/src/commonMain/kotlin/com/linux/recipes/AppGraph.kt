@@ -2,6 +2,8 @@ package com.linux.recipes
 
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.linux.recipes.data.Api
+import com.linux.recipes.data.BillingRepository
+import com.linux.recipes.data.DefaultBillingRepository
 import com.linux.recipes.data.ConsentRepository
 import com.linux.recipes.data.DefaultConsentRepository
 import com.linux.recipes.data.DefaultImportRepository
@@ -13,11 +15,16 @@ import com.linux.recipes.data.RecipeRepository
 import com.linux.recipes.data.SessionRepository
 import com.linux.recipes.data.TokenStore
 import com.linux.recipes.platform.AuthProvider
+import com.linux.recipes.platform.BillingProvider
+import com.linux.recipes.platform.RevenueCatBillingProvider
 import com.linux.recipes.platform.SecureStore
 import com.linux.recipes.platform.TextRecognizer
 import com.linux.recipes.platform.TurnstileGate
 import com.linux.recipes.platform.platformTextRecognizer
 import io.ktor.client.HttpClient
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.io.buffered
 import kotlinx.io.files.FileSystem
 import kotlinx.io.files.Path
@@ -26,6 +33,7 @@ import kotlinx.io.files.SystemFileSystem
 /**
  * The app's object graph, built once per process by the platform entry point. No DI framework.
  * [filesDir] is the app's private files directory; the offline cache lives in `<filesDir>/recipes-data`.
+ * [billingProvider] builds the store seam; only the debug build's provider uses the session token it is given.
  */
 class AppGraph(
     filesDir: String,
@@ -34,6 +42,7 @@ class AppGraph(
     httpClient: HttpClient = Api.httpClient(),
     val baseUrl: String = AppConfig.API_BASE_URL,
     val textRecognizer: TextRecognizer = platformTextRecognizer(),
+    billingProvider: (sessionToken: () -> String?) -> BillingProvider = { RevenueCatBillingProvider(apiKey = "", manageFallback = null) },
 ) {
     val turnstile = TurnstileGate()
     private val tokens = TokenStore(
@@ -81,6 +90,15 @@ class AppGraph(
             consentRepositoryImpl.clearLocal()
             recipeRepositoryImpl.clearLocal()
         },
+    )
+
+    val billing: BillingRepository = DefaultBillingRepository(
+        api = api,
+        provider = billingProvider { tokens.token },
+        session = session,
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+        currentToken = { tokens.token },
+        onUnauthorized = { session.signOut() },
     )
 
     companion object {

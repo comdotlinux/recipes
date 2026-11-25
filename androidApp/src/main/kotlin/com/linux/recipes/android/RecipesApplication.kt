@@ -20,6 +20,7 @@ class RecipesApplication : Application() {
             secureStore = AndroidSecureStore(File(noBackupFilesDir, "secure")),
             authProvider = BuildVariant.authProvider { currentActivity?.get() },
             baseUrl = BuildVariant.baseUrl,
+            billingProvider = BuildVariant::billingProvider,
         )
     }
 }

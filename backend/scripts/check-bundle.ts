@@ -5,6 +5,7 @@ import { join } from "node:path";
 const FORBIDDEN: [string, RegExp][] = [
 	["test identity provider marker", /__TEST_IDP__/],
 	["local AI stand-in marker", /__LOCAL_AI_STUB__/],
+	["local subscription switch marker", /__LOCAL_BILLING_STUB__/],
 	["development secret value", /dev-only-/],
 	["Cloudflare Turnstile test key", /1x0{20,}[A-Z]{2}/],
 ];

@@ -41,7 +41,8 @@ sealed interface ImportOutcome {
 /** The one open job. It survives leaving the screen and an app restart (the job id is kept in the cache settings). */
 data class ImportJobState(val jobId: String, val kind: String, val outcome: ImportOutcome?, val offline: Boolean)
 
-data class Quota(val freeImportUsed: Boolean, val monthUsed: Int, val monthLimit: Int, val entitled: Boolean)
+/** [entitledUntil]: the end of the subscription (ISO 8601) while [entitled], from `entitlement.expiresAt`. */
+data class Quota(val freeImportUsed: Boolean, val monthUsed: Int, val monthLimit: Int, val entitled: Boolean, val entitledUntil: String? = null)
 
 enum class ReportReason { WrongContent, Offensive, Other }
 

@@ -38,6 +38,22 @@ A free account has one import; a `no_recipe`, `guard_block` or `failed` outcome 
 uses it. Sign in with another `idToken` subject (`__TEST_IDP__|someone-else|...`) for a fresh account.
 URL import: `-d '{"kind":"url","url":"https://example.org/"}'`. Photo import: `-H 'content-type: image/jpeg' --data-binary @photo.jpg`.
 
+## Try the subscription locally
+
+`env.local` has no RevenueCat key, so the local entry answers RevenueCat's part itself (`src/testing/local-billing.ts`):
+a switch per signed-in user, set with a local-only route. With `$B` and `$T` from the import example above:
+
+```sh
+curl -s -X POST $B/testing/entitlement -H "authorization: Bearer $T" -H 'content-type: application/json' -d '{"active":true}'   # 30-day subscription
+curl -s $B/me -H "authorization: Bearer $T"                                   # entitlement.active true, 30 monthly imports, 500 MB cap
+curl -s -X POST $B/entitlement/refresh -H "authorization: Bearer $T"          # what the app calls after a purchase or restore
+curl -s -X POST $B/testing/entitlement -H "authorization: Bearer $T" -H 'content-type: application/json' -d '{"active":false}'  # lapse
+```
+
+The route exists only in the local entry, and `build:check` fails if its marker reaches the production bundle.
+Staging and production need the secrets `REVENUECAT_API_KEY` (a RevenueCat v1 secret key) and `REVENUECAT_WEBHOOK_SECRET`
+(the exact value entered as the webhook's authorization header in the RevenueCat dashboard; webhook URL `https://<host>/v1/webhooks/revenuecat`).
+
 ## Checks
 
 ```sh

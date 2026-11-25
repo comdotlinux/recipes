@@ -38,17 +38,22 @@ val generateContractFixtures = tasks.register("generateContractFixtures") {
     }
 }
 
-// Client settings from gradle.properties (API_BASE_URL, GOOGLE_SERVER_CLIENT_ID), compiled into commonMain.
+// Client settings from gradle.properties, compiled into commonMain.
 val generateAppConfig = tasks.register("generateAppConfig") {
     val baseUrl = providers.gradleProperty("API_BASE_URL")
-    val googleClientId = providers.gradleProperty("GOOGLE_SERVER_CLIENT_ID").orElse("")
+    val values = listOf("GOOGLE_SERVER_CLIENT_ID", "REVENUECAT_ANDROID_KEY", "REVENUECAT_IOS_KEY", "TERMS_URL", "PRIVACY_URL")
+        .associateWith { providers.gradleProperty(it).orElse("") }
     val outputDir = layout.buildDirectory.dir("generated/appConfig/commonMain/kotlin")
     inputs.property("baseUrl", baseUrl)
-    inputs.property("googleClientId", googleClientId)
+    values.forEach { (name, value) -> inputs.property(name, value) }
     outputs.dir(outputDir)
     doLast {
         val url = baseUrl.get()
         check(url.startsWith("https://") && !url.endsWith("/")) { "API_BASE_URL must be https and have no trailing slash: $url" }
+        // RevenueCat's public SDK keys start with goog_ or appl_; a secret key (sk_) must never ship in the app.
+        listOf("REVENUECAT_ANDROID_KEY", "REVENUECAT_IOS_KEY").forEach { name ->
+            check(!values.getValue(name).get().startsWith("sk_")) { "$name is a RevenueCat secret key; use the public SDK key" }
+        }
         // The task owns its output directory: files from earlier package names must not survive.
         outputDir.get().asFile.deleteRecursively()
         val target = outputDir.get().file("com/linux/recipes/AppConfig.kt").asFile
@@ -58,7 +63,7 @@ val generateAppConfig = tasks.register("generateAppConfig") {
                 "package com.linux.recipes\n\n" +
                 "object AppConfig {\n" +
                 "    const val API_BASE_URL: String = \"$url\"\n" +
-                "    const val GOOGLE_SERVER_CLIENT_ID: String = \"${googleClientId.get()}\"\n" +
+                values.entries.joinToString("") { (name, value) -> "    const val $name: String = \"${value.get()}\"\n" } +
                 "}\n",
         )
     }
@@ -114,11 +119,20 @@ kotlin {
         }
     }
 
-    listOf(iosArm64(), iosSimulatorArm64()).forEach { target ->
+    // RevenueCat's cinterop klibs carry `-L` to the Swift libraries of the Xcode they were built with
+    // (/Applications/Xcode-16.4.app, RevenueCat/purchases-kmp#1067), and Kotlin/Native calls `ld` directly, so a test
+    // executable never finds swiftCompatibility56 and friends. The selected Xcode's directories are added instead, plus
+    // the `-rpath /usr/lib/swift` RevenueCat's own build gives its test executables (build-logic configureKotlin.kt).
+    // Only macOS links iOS binaries; elsewhere `xcode-select` is never run.
+    val swiftLibs = providers.exec { commandLine("xcode-select", "-p") }.standardOutput.asText
+        .map { "${it.trim()}/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift" }
+    val linksOnThisHost = System.getProperty("os.name").startsWith("Mac")
+    listOf(iosArm64() to "iphoneos", iosSimulatorArm64() to "iphonesimulator").forEach { (target, platform) ->
         target.binaries.framework {
             baseName = "Shared"
             isStatic = true
         }
+        if (linksOnThisHost) target.binaries.configureEach { linkerOpts("-L${swiftLibs.get()}/$platform", "-rpath", "/usr/lib/swift") }
     }
 
     sourceSets {
@@ -141,6 +155,7 @@ kotlin {
             implementation(libs.jetbrains.lifecycle.viewmodel.compose)
             implementation(libs.coil.compose)
             implementation(libs.filekit.dialogs.compose)
+            implementation(libs.revenuecat.purchases.core)
         }
         androidMain.dependencies {
             implementation(libs.ktor.client.android)

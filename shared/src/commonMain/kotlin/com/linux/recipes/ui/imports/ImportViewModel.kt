@@ -58,6 +58,8 @@ class ImportViewModel(
         private set
 
     private var retrySource: ImportSource? = null
+    /** The source that hit 402 quota_exhausted while the paywall is open. */
+    private var paywallSource: ImportSource? = null
 
     /** The Idempotency-Key of the current attempt: kept after Offline so a retry is never charged twice. */
     private var attemptId: String? = null
@@ -179,6 +181,14 @@ class ImportViewModel(
 
     fun closePaywall() {
         paywallOpen = false
+        paywallSource = null
+    }
+
+    /** Recipes Pro is active: the import that ran out of quota starts again. */
+    fun subscribed() {
+        val source = paywallSource
+        closePaywall()
+        if (source != null) start(source)
     }
 
     fun acknowledge(jobId: String) = imports.acknowledge(jobId)
@@ -204,7 +214,10 @@ class ImportViewModel(
                 }
                 ImportStart.AlreadyRunning -> poll()
                 ImportStart.ConsentRequired -> consentFor = source
-                ImportStart.QuotaExhausted -> paywallOpen = true
+                ImportStart.QuotaExhausted -> {
+                    paywallSource = source
+                    paywallOpen = true
+                }
                 ImportStart.AttemptLimit -> problem = StartProblem.AttemptLimit
                 ImportStart.Offline -> {
                     retrySource = source

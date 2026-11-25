@@ -54,10 +54,13 @@ import com.linux.recipes.ui.components.AppMark
 import com.linux.recipes.ui.components.PageGutter
 import com.linux.recipes.ui.components.RecipeIcons
 import com.linux.recipes.ui.edit.PictureActions
+import com.linux.recipes.ui.paywall.LocalBilling
+import com.linux.recipes.ui.paywall.Paywall
+import com.linux.recipes.ui.paywall.PaywallSheet
 import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.stringResource
-import recipes.shared.generated.resources.Res
 import recipes.shared.generated.resources.action_close
+import recipes.shared.generated.resources.Res
 import recipes.shared.generated.resources.consent_accept
 import recipes.shared.generated.resources.consent_body_control
 import recipes.shared.generated.resources.consent_body_kinds
@@ -80,8 +83,6 @@ import recipes.shared.generated.resources.import_invalid_url
 import recipes.shared.generated.resources.import_link_label
 import recipes.shared.generated.resources.import_no_recipe
 import recipes.shared.generated.resources.import_offline_start
-import recipes.shared.generated.resources.import_paywall_body
-import recipes.shared.generated.resources.import_paywall_title
 import recipes.shared.generated.resources.import_photos_free
 import recipes.shared.generated.resources.import_read_with_ai
 import recipes.shared.generated.resources.import_reading_photo
@@ -404,45 +405,13 @@ private fun Paragraph(text: StringResource) {
 // ---------- the paywall ----------
 
 /**
- * The one entry point for "out of imports". Milestone M3 replaces the body of [ImportPaywallContent]
- * with the store paywall; callers only ever use this composable.
+ * The one entry point for "out of imports": the Recipes Pro paywall of `ui/paywall`. [onSubscribed] runs
+ * once Recipes Pro is active, so the import that hit the limit can continue.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ImportPaywall(onTypeIn: () -> Unit, onClose: () -> Unit) {
-    ModalBottomSheet(
-        onDismissRequest = onClose,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-    ) {
-        ImportPaywallContent(onTypeIn, onClose)
-    }
-}
+fun ImportPaywall(onTypeIn: () -> Unit, onClose: () -> Unit, onSubscribed: () -> Unit = onClose) =
+    PaywallSheet(onClose = onClose, onSubscribed = onSubscribed, onTypeIn = onTypeIn)
 
 @Composable
-internal fun ImportPaywallContent(onTypeIn: () -> Unit, onClose: () -> Unit) {
-    Column(
-        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = PageGutter, end = PageGutter, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(
-            stringResource(Res.string.import_paywall_title),
-            style = MaterialTheme.typography.headlineSmall,
-            modifier = Modifier.semantics { heading() },
-        )
-        Text(
-            stringResource(Res.string.import_paywall_body),
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.size(4.dp))
-        Button(onClick = onTypeIn, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp), shape = MaterialTheme.shapes.medium) {
-            Icon(RecipeIcons.Edit, contentDescription = null, modifier = Modifier.size(20.dp))
-            Spacer(Modifier.size(8.dp))
-            Text(stringResource(Res.string.import_type_instead))
-        }
-        TextButton(onClick = onClose, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-            Text(stringResource(Res.string.action_close))
-        }
-    }
-}
+internal fun ImportPaywallContent(onTypeIn: () -> Unit, onClose: () -> Unit) =
+    Paywall(LocalBilling.current, onTypeIn, onClose, onSubscribed = onClose)

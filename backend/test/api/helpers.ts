@@ -23,6 +23,7 @@ export const json = (body: unknown) => ({ body: JSON.stringify(body), headers: {
 // ---- outbound fetch: provider keys and Turnstile ----
 
 export const TURNSTILE_OK = "turnstile-ok";
+export const REVENUECAT = "https://api.revenuecat.com/";
 const keys = await generateKeyPair("RS256", { extractable: true });
 const otherKeys = await generateKeyPair("RS256", { extractable: true });
 const jwk = { ...(await exportJWK(keys.publicKey)), kid: "k1", alg: "RS256", use: "sig" };
@@ -39,6 +40,8 @@ export function interceptOutbound() {
 		if (url === "https://appleid.apple.com/auth/keys" || url === "https://www.googleapis.com/oauth2/v3/certs") {
 			return Response.json({ keys: [jwk] }, { headers: { "cache-control": "no-store" } });
 		}
+		// RevenueCat is unreachable unless a test answers for it (test/api/billing.test.ts); never the real service.
+		if (url.startsWith(REVENUECAT)) return new Response(null, { status: 503 });
 		return real(input, init);
 	});
 }

@@ -58,8 +58,57 @@ const LENGTH_REQUIRED = error(411, "length_required", "send Content-Length");
 // The RPC stub types map `unknown` bodies to never; every method returns a structured-clonable Result, so use the class types.
 type UserObject = Pick<
 	UserDO,
-	"createSession" | "deleteSession" | "me" | "listRecipes" | "putRecipe" | "deleteRecipe" | "putImage" | "getImage" | "setConsent" | "clearConsent" | "startImport" | "getJob" | "report"
+	| "createSession"
+	| "deleteSession"
+	| "me"
+	| "listRecipes"
+	| "putRecipe"
+	| "deleteRecipe"
+	| "putImage"
+	| "getImage"
+	| "setConsent"
+	| "clearConsent"
+	| "startImport"
+	| "getJob"
+	| "report"
+	| "refreshFromClient"
+	| "entitlementChanged"
 >;
+
+const MAX_WEBHOOK_BODY = 64 * 1024;
+/** Our user ids (auth deriveUserId): anything else in a webhook is not one of our accounts. */
+const USER_ID = /^[A-Za-z0-9_-]{43}$/;
+/** Event types named in RevenueCat's documentation (docs/versions/backend.md); only used to label the metric. */
+const WEBHOOK_TYPES = new Set([
+	"TEST",
+	"INITIAL_PURCHASE",
+	"RENEWAL",
+	"CANCELLATION",
+	"UNCANCELLATION",
+	"NON_RENEWING_PURCHASE",
+	"SUBSCRIPTION_PAUSED",
+	"EXPIRATION",
+	"BILLING_ISSUE",
+	"PRODUCT_CHANGE",
+	"TRANSFER",
+	"SUBSCRIPTION_EXTENDED",
+	"REFUND_REVERSED",
+	"TEMPORARY_ENTITLEMENT_GRANT",
+	"INVOICE_ISSUANCE",
+]);
+const AppUserIds = z.array(z.string().max(512)).max(5).nullish();
+/** Only the fields that name accounts; the rest of the payload is not trusted and not read (plan 4.6). */
+const WebhookBody = z.object({
+	event: z.object({ type: z.string().min(1).max(64), app_user_id: z.string().max(512).nullish(), transferred_from: AppUserIds, transferred_to: AppUserIds }),
+});
+
+/** Constant time: both sides are hashed first, so the comparison never depends on where they differ or on their lengths. */
+async function webhookAuthorized(header: string | undefined, secret: string | undefined): Promise<boolean> {
+	if (!secret || header === undefined) return false;
+	const digest = (s: string) => crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+	const [a, b] = await Promise.all([digest(header), digest(secret)]);
+	return crypto.subtle.timingSafeEqual(a, b);
+}
 
 /** The only way to an object: the user id comes from the authenticated token, never from the client. */
 const userObject = (env: Env, userId: string): UserObject => {
@@ -321,6 +370,42 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 			return o.report(a.secretHash, { ...parsed.data, note: parsed.data.note ?? "" });
 		}),
 	);
+
+	// docs/api.md "Milestone M3": the app calls this after a purchase or a restore.
+	app.post(
+		"/v1/entitlement/refresh",
+		authed((o, a) => o.refreshFromClient(a.secretHash)),
+	);
+
+	// RevenueCat webhook: outside the bearer auth, authorised by the header value set in the RevenueCat dashboard.
+	app.post("/v1/webhooks/revenuecat", async (c) => {
+		if (!(await webhookAuthorized(c.req.header("authorization"), c.env.REVENUECAT_WEBHOOK_SECRET))) {
+			systemEvent(c.env, { event: "auth_failure", reason: "webhook_unauthorized" });
+			if (await limitedByIp(c, "webhook")) return fail(c, 429, "rate_limited", "too many failed authentications");
+			return fail(c, 401, "unauthenticated", "wrong webhook authorization");
+		}
+		// One key for the route: bounds the objects and RevenueCat calls one leaked secret can cause; RevenueCat retries a 429.
+		if (!(await c.env.RL_WEBHOOK.limit({ key: "revenuecat" })).success) {
+			systemEvent(c.env, { event: "rate_limited", route: "webhook" });
+			return fail(c, 429, "rate_limited", "too many webhook requests");
+		}
+		const size = bodyCheck(c, MAX_WEBHOOK_BODY);
+		if (size === "length_required") return reply(c, LENGTH_REQUIRED);
+		if (size === "too_long") return fail(c, 413, "body_too_large", "webhook body over 64 KB");
+		let event: z.infer<typeof WebhookBody>["event"];
+		try {
+			const text = await c.req.text();
+			if (byteLength(text) > MAX_WEBHOOK_BODY) return fail(c, 413, "body_too_large", "webhook body over 64 KB");
+			event = WebhookBody.parse(JSON.parse(text)).event;
+		} catch {
+			return fail(c, 400, "invalid_body", "not a RevenueCat event");
+		}
+		systemEvent(c.env, { event: "billing_webhook", type: WEBHOOK_TYPES.has(event.type) ? event.type : "OTHER" });
+		// A transfer refreshes both sides; every other event its own customer. Ids of other shapes are ignored.
+		const ids = new Set([event.app_user_id, ...(event.transferred_from ?? []), ...(event.transferred_to ?? [])].filter((id) => id && USER_ID.test(id)));
+		await Promise.all([...ids].map((id) => userObject(c.env, id!).entitlementChanged()));
+		return c.json({ received: true });
+	});
 
 	app.notFound((c) => fail(c, 404, "not_found", "no such route"));
 

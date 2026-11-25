@@ -87,6 +87,23 @@ describe("POST /session refusals (AC4)", () => {
 		});
 	}
 
+	// docs/api.md "Order of checks in POST /session": with two checks failing at once, the earlier one answers.
+	const FAKE_NONCE = "n1.9999999999999.AAAA";
+	const twoFailures: [string, () => Promise<Response>, number, string][] = [
+		["age not confirmed and invalid Turnstile token", () => attempt("google", {}, { ageConfirmed: false, turnstileToken: "bad" }), 400, "age_confirmation_required"],
+		["invalid Turnstile token and invalid nonce", async () =>
+			session({ provider: "google", idToken: await providerToken("google", FAKE_NONCE), nonce: FAKE_NONCE, turnstileToken: "bad", ageConfirmed: true }), 401, "invalid_turnstile"],
+		["invalid nonce and invalid id token", async () =>
+			session({ provider: "google", idToken: await providerToken("google", FAKE_NONCE, { wrongKey: true }), nonce: FAKE_NONCE, turnstileToken: TURNSTILE_OK, ageConfirmed: true }), 401, "invalid_nonce"],
+		["invalid body and age not confirmed", () => session({ provider: "google", idToken: "x", nonce: "n", turnstileToken: "", ageConfirmed: false }), 400, "invalid_body"],
+	];
+	for (const [name, run, status, code] of twoFailures) {
+		it(`first failing check wins: ${name}`, async () => {
+			const res = await run();
+			expect([res.status, await errorCode(res)]).toEqual([status, code]);
+		});
+	}
+
 	it("expired nonce", async () => {
 		const n = await nonce();
 		vi.useFakeTimers({ now: Date.now() + 6 * 60_000, toFake: ["Date"] });

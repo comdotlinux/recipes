@@ -114,6 +114,9 @@ data class Me(
     @Serializable data class Storage(val usedBytes: Long, val capBytes: Long)
 }
 
+/** `POST /entitlement/refresh`: the entitlement, quota and storage parts of `GET /me`, read from RevenueCat just now. */
+@Serializable data class EntitlementRefresh(val entitlement: Me.Entitlement, val quota: Me.Quota, val storage: Me.Storage)
+
 /** One page of `GET /recipes`: while [more] is true, ask again with `since = rev`. */
 @Serializable data class RecipeList(val recipes: List<Recipe>, val rev: Long, val more: Boolean = false)
 
@@ -144,7 +147,7 @@ private data class ErrorBody(val error: Detail) {
     @Serializable data class Detail(val code: String, val message: String = "")
 }
 
-/** One function per M1 and M2 route of docs/api.md. Never throws except for cancellation. */
+/** One function per M1, M2 and M3 app route of docs/api.md. Never throws except for cancellation. */
 class Api(
     private val http: HttpClient,
     private val baseUrl: String,
@@ -225,6 +228,8 @@ class Api(
             json(report)
         }
     }
+
+    suspend fun refreshEntitlement(): ApiResult<EntitlementRefresh> = call { post(url("/entitlement/refresh")) { auth() } }
 
     private fun url(path: String) = "$baseUrl/v1$path"
 
