@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlin.uuid.Uuid
 
 /**
  * [ImportRepository] over [Api] (docs/api.md, "Imports"). The open job id and kind are kept in the cache
@@ -44,10 +45,8 @@ class DefaultImportRepository(
         if (!consent.isGiven) return ImportStart.ConsentRequired
         val result = when (source) {
             is ImportSource.Link -> api.startImport(jobId, ImportRequest(kind = "url", url = source.url))
-            is ImportSource.Photo -> when (val text = handOverText(recognizer.recognize(source.jpeg))) {
-                null -> api.startPhotoImport(jobId, source.jpeg)
-                else -> api.startImport(jobId, ImportRequest(kind = "text", text = text))
-            }
+            is ImportSource.Text -> api.startImport(jobId, ImportRequest(kind = "text", text = source.text))
+            is ImportSource.Photo -> api.startPhotoImport(jobId, source.jpeg)
         }
         return when (result) {
             is ApiResult.Ok -> {
@@ -70,6 +69,10 @@ class DefaultImportRepository(
             }
         }
     }
+
+    override suspend fun readOnDevice(jpeg: ByteArray): LocalRead =
+        handOverText(recognizer.recognize(jpeg))?.let { LocalRead.Draft(parseRecipeText(it, Uuid.random().toString()), it) }
+            ?: LocalRead.Unreadable
 
     override suspend fun resume() {
         while (true) {
@@ -145,12 +148,12 @@ class DefaultImportRepository(
         const val POLL_INTERVAL_MS = 2_000L
 
         /**
-         * Recognised text shorter than this many characters (after trimming) is not trusted, and the photo
-         * itself is sent. A starting value: the OCR bake-off sets the final one.
+         * Recognised text shorter than this many characters (after trimming) is not trusted: the photo counts
+         * as unreadable on the phone. A starting value: the OCR bake-off sets the final one.
          */
         const val HANDOVER_MIN_CHARS = 40
 
-        /** The text to send as kind `text`, or null when the photo itself must go. */
+        /** The trimmed text to build a draft from, or null when the photo counts as unreadable. */
         fun handOverText(recognition: Recognition): String? =
             (recognition as? Recognition.Text)?.text?.trim()?.takeIf { it.length >= HANDOVER_MIN_CHARS }
 
