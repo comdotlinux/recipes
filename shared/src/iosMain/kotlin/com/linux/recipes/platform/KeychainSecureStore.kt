@@ -44,6 +44,9 @@ import platform.Security.kSecValueData
 /**
  * Generic-password Keychain items under [service], one per key. Items are readable after the first unlock
  * and never leave the device (`ThisDeviceOnly`: excluded from backups and device transfer).
+ * Never throws: before the first unlock, or in a process without a Keychain (`errSecNotAvailable`,
+ * `errSecMissingEntitlement`), every call fails; a value that cannot be read is absent, and a failed write or
+ * delete returns false. Failures are logged with their OSStatus only.
  */
 @OptIn(ExperimentalForeignApi::class)
 class KeychainSecureStore(private val service: String) : SecureStore {
@@ -52,29 +55,39 @@ class KeychainSecureStore(private val service: String) : SecureStore {
         val result = alloc<CFTypeRefVar>()
         val status = SecItemCopyMatching(query, result.ptr)
         CFRelease(query)
-        if (status != errSecSuccess) return@memScoped null
+        if (!succeeded("read", status)) return@memScoped null
         val data: CFDataRef = result.value?.reinterpret() ?: return@memScoped null
         val bytes = CFDataGetBytePtr(data)?.readBytes(CFDataGetLength(data).convert()) ?: ByteArray(0)
         CFRelease(data)
         bytes.decodeToString()
     }
 
-    override fun put(key: String, value: String) {
-        remove(key)
+    override fun put(key: String, value: String): Boolean {
+        if (!remove(key)) return false
         val bytes = value.encodeToByteArray()
         val data = bytes.usePinned { CFDataCreate(null, it.addressOf(0).reinterpret(), bytes.size.convert()) }
         val query = itemQuery(key, kSecValueData to data, kSecAttrAccessible to kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly)
         val status = SecItemAdd(query, null)
         CFRelease(query)
         CFRelease(data)
-        check(status == errSecSuccess) { "Keychain add failed: OSStatus $status" }
+        return succeeded("add", status)
     }
 
-    override fun remove(key: String) {
+    override fun remove(key: String): Boolean = succeeded("delete", delete(key))
+
+    /** The raw OSStatus of deleting [key]; tests use it to tell a working Keychain from an unavailable one. */
+    internal fun delete(key: String): Int {
         val query = itemQuery(key)
         val status = SecItemDelete(query)
         CFRelease(query)
-        check(status == errSecSuccess || status == errSecItemNotFound) { "Keychain delete failed: OSStatus $status" }
+        return status
+    }
+
+    /** Success or "no such item"; anything else is logged with its status code only. */
+    private fun succeeded(operation: String, status: Int): Boolean {
+        val ok = status == errSecSuccess || status == errSecItemNotFound
+        if (!ok) println("RecipesKeychain: $operation failed: OSStatus $status")
+        return ok
     }
 
     private fun itemQuery(key: String, vararg extra: Pair<CFTypeRef?, CFTypeRef?>): CFMutableDictionaryRef? {

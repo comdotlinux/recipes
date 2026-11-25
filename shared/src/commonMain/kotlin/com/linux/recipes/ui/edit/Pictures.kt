@@ -2,6 +2,7 @@ package com.linux.recipes.ui.edit
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.staticCompositionLocalOf
 import io.github.vinceglb.filekit.FileKit
 import io.github.vinceglb.filekit.ImageFormat
 import io.github.vinceglb.filekit.PlatformFile
@@ -14,6 +15,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 class PictureActions(val takePhoto: () -> Unit, val choose: () -> Unit)
+
+/**
+ * Null in the app, so [rememberPictureActions] uses FileKit. UI tests provide a double: on iOS FileKit's launchers
+ * need the UIViewController of a real window, which the Compose test harness does not have.
+ */
+val LocalPictureActions = staticCompositionLocalOf<PictureActions?> { null }
 
 /** Quality and longest edge, tried in order until the JPEG fits [Limits.IMAGE_BYTES]. */
 private val COMPRESSION_STEPS = listOf(85 to 2048, 75 to 1600, 65 to 1280, 55 to 1024)
@@ -33,6 +40,7 @@ internal suspend fun compressForUpload(compress: suspend (quality: Int, edge: In
  */
 @Composable
 fun rememberPictureActions(remaining: Int, onPicked: (ByteArray) -> Unit, onFailed: () -> Unit): PictureActions {
+    LocalPictureActions.current?.let { return it }
     val scope = rememberCoroutineScope()
     val handle: (PlatformFile) -> Unit = { file -> scope.compress(file, onPicked, onFailed) }
     val camera = rememberCameraPickerLauncher { file -> file?.let(handle) }
