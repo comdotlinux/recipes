@@ -2,6 +2,7 @@ package com.linux.recipes.ui.translate
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -242,10 +243,13 @@ internal fun LanguageSheetContent(recipe: Recipe, shown: String?, onChoose: (Str
                             style = MaterialTheme.typography.bodyMedium,
                             color = if (translation?.stale == true) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                    }
-                    if (translation?.stale == true && code != original) {
-                        TextButton(onClick = { onTranslateAgain(code) }, modifier = Modifier.heightIn(min = 48.dp)) {
-                            Text(stringResource(Res.string.translate_again))
+                        // Below the name, not beside it, so long names keep their width at 200 % font.
+                        if (translation?.stale == true && code != original) {
+                            TextButton(
+                                onClick = { onTranslateAgain(code) },
+                                modifier = Modifier.heightIn(min = 48.dp),
+                                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp),
+                            ) { Text(stringResource(Res.string.translate_again)) }
                         }
                     }
                     if (selected) Icon(RecipeIcons.Check, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))

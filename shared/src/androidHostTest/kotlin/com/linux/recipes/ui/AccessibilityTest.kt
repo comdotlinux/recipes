@@ -14,6 +14,12 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.v2.runComposeUiTest
 import com.linux.recipes.UiTest
+import com.linux.recipes.data.tempDir
+import com.linux.recipes.ui.theme.AppearanceSection
+import com.linux.recipes.ui.theme.AppearanceStore
+import com.linux.recipes.ui.translate.LanguageSheetContent
+import com.linux.recipes.ui.translate.TranslateViewModel
+import kotlinx.io.files.Path
 import com.linux.recipes.ui.detail.RecipeDetailScreen
 import com.linux.recipes.ui.detail.RecipeDetailViewModel
 import com.linux.recipes.ui.edit.RecipeEditScreen
@@ -208,5 +214,43 @@ class AccessibilityTest : UiTest() {
             remember { RecipeEditViewModel(FakeRecipeRepository(), null, "en", importedDraft) },
             FakeImportRepository(), "j", {}, {},
         )
+    }
+
+    // ---------- M4: translation and themes ----------
+
+    @Test
+    fun languageSheetRowsAreLabelled() = screen({
+        LanguageSheetContent(translatedSalad, shown = "en", onChoose = {}, onTranslateAgain = {})
+    }) { found ->
+        assertTrue(found.all { it.label.isNotEmpty() }, "unlabelled: ${found.filter { it.label.isEmpty() }.map { it.info.className }}")
+        assertNotNull(found.singleOrNull { it.label == "English Translation available" }, "found: ${found.map { it.label }}")
+        assertNotNull(found.singleOrNull { it.label == "Translate again" }, "found: ${found.map { it.label }}")
+        assertNotNull(found.singleOrNull { it.label == "Deutsch Original" }, "found: ${found.map { it.label }}")
+    }
+
+    @Test
+    fun translatedDetailClickablesAreLabelled() = screen({
+        RecipeDetailScreen(
+            remember { RecipeDetailViewModel(FakeRecipeRepository(listOf(translatedSalad)), translatedSalad.id) }, {}, {},
+            translate = remember {
+                val translations = FakeTranslationRepository().apply {
+                    displayLanguages[translatedSalad.id] = "en"
+                    jobIds[translatedSalad.id to "en"] = "job-en"
+                }
+                TranslateViewModel(translatedSalad.id, translations, FakeConsentRepository())
+            },
+        )
+    }) { found ->
+        assertTrue(found.all { it.label.isNotEmpty() }, "unlabelled: ${found.filter { it.label.isEmpty() }.map { it.info.className }}")
+        assertNotNull(found.singleOrNull { it.label == "Show in another language" }, "found: ${found.map { it.label }}")
+        assertNotNull(found.singleOrNull { it.label == "Report a problem with this translation" }, "found: ${found.map { it.label }}")
+    }
+
+    @Test
+    fun appearanceSwatchesAreLabelledWithTheirNames() = screen({
+        AppearanceSection(remember { AppearanceStore(Path(tempDir(), "appearance.json")) })
+    }) { found ->
+        assertEquals(listOf("Herb", "Tomato", "Ocean", "Charcoal", "Same as the phone", "Light", "Dark"), found.map { it.label })
+        assertTrue(found.first().info.isChecked, "the current palette is marked")
     }
 }
