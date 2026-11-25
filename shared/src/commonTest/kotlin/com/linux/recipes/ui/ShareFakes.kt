@@ -21,6 +21,8 @@ class FakeFileActions(var picked: ByteArray? = null) {
     val saved = mutableListOf<Pair<String, ByteArray>>()
     var cancelSave = false
     var releases = 0
+    /** When set, the open dialog returns what this makes (a backup the test exports first). */
+    var pickedLater: (suspend () -> ByteArray)? = null
 
     val actions = FileActions(
         shareText = { sharedTexts += it },
@@ -32,7 +34,7 @@ class FakeFileActions(var picked: ByteArray? = null) {
                 true
             }
         },
-        pick = { picked?.let { bytes -> PickedFile(open = { Buffer().apply { write(bytes) } }, release = { releases++ }) } },
+        pick = { (pickedLater?.invoke() ?: picked)?.let { bytes -> PickedFile(open = { Buffer().apply { write(bytes) } }, release = { releases++ }) } },
         shareFile = { name, bytes -> sharedFiles += name to bytes },
     )
 }
