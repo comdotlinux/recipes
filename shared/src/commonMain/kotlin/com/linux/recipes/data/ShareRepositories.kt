@@ -5,8 +5,12 @@ import kotlinx.serialization.Serializable
 
 // Signatures fixed by docs/api.md, "Module boundaries / Client, milestone M5". Change only together with that section.
 
-/** A link this device made. The server keeps no list of an owner's links, so the app keeps its own. */
-@Serializable data class ShareLink(val shareId: String, val recipeId: String, val url: String, val expiresAt: String)
+/**
+ * An active link of the user. [url] is known only on the device that made the link (the server never hands the token
+ * out again), so "Copy link" exists only there; [recipients] is how many people added the recipe, when the server says.
+ */
+@Serializable
+data class ShareLink(val shareId: String, val recipeId: String, val url: String? = null, val expiresAt: String, val recipients: Int? = null)
 
 sealed interface ShareCreate {
     data class Created(val link: ShareLink) : ShareCreate
@@ -43,8 +47,10 @@ sealed interface ShareAccept {
 }
 
 interface ShareRepository {
-    /** Links made on this device that have not expired or been revoked, newest first. Cleared on sign-out. */
+    /** The user's active links, newest first: from `GET /shares` once [refresh] worked, else those made here. Cleared on sign-out. */
     val links: StateFlow<List<ShareLink>>
+    /** Loads `GET /shares` into [links], keeping the URLs of links made here. False when offline or the route is missing. */
+    suspend fun refresh(): Boolean
     suspend fun create(recipeId: String): ShareCreate
     /** True once the link is gone on the server (204, or 404 because it no longer exists). */
     suspend fun revoke(shareId: String): Boolean

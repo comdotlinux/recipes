@@ -69,6 +69,16 @@ class FakeShareRepository(private val recipes: FakeRecipeRepository? = null) : S
         return result
     }
 
+    var refreshes = 0
+    /** What `GET /shares` answers on [refresh]; null keeps [links] as they are (offline, or the route missing). */
+    var serverLinks: List<ShareLink>? = null
+
+    override suspend fun refresh(): Boolean {
+        refreshes++
+        serverLinks?.let { links.value = it }
+        return serverLinks != null
+    }
+
     override suspend fun revoke(shareId: String): Boolean {
         if (revokeResult) links.value = links.value.filterNot { it.shareId == shareId }
         return revokeResult

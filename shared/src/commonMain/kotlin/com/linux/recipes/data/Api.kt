@@ -255,6 +255,8 @@ class Api(
     // M5: sharing and PDF. The share token goes only in request bodies, never in a path or query.
     suspend fun createShare(recipeId: String): ApiResult<ShareCreated> = call { post(url("/recipes/$recipeId/shares")) { auth() } }
 
+    suspend fun shares(): ApiResult<ShareList> = call { get(url("/shares")) { auth() } }
+
     suspend fun deleteShare(shareId: String): ApiResult<Unit> = call { delete(url("/shares/$shareId")) { auth() } }
 
     suspend fun openShare(token: String): ApiResult<SharePreview> = call {

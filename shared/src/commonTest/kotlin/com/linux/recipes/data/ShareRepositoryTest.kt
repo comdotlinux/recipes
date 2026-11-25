@@ -103,6 +103,51 @@ class ShareRepositoryTest {
     }
 
     @Test
+    fun refreshTakesTheServerListAndKeepsTheUrlsMadeHere() = runTest {
+        server.handler = { json(fixture("share_created.json"), HttpStatusCode.Created) }
+        val repo = repository()
+        repo.create(ID_A)
+        server.handler = { json(fixture("shares_list.json")) }
+        assertTrue(repo.refresh())
+        assertEquals("$BASE/v1/shares", server.requests.last().url.toString())
+        assertEquals(HttpMethod.Get, server.requests.last().method)
+        assertEquals(
+            listOf(
+                ShareLink(created.shareId, ID_A, created.url, "2026-12-25T10:00:00Z", recipients = 2),
+                ShareLink("aa11bb22cc33dd44ee55ff6677889900", ID_A, null, "2026-12-20T08:30:00Z", recipients = 0),
+            ),
+            repo.links.value,
+        )
+        // Kept across restarts, URL included.
+        assertEquals(repo.links.value, repository().links.value)
+        // A link revoked on another device disappears with the next list.
+        server.handler = { json("""{"shares":[]}""") }
+        assertTrue(repo.refresh())
+        assertEquals(emptyList(), repo.links.value)
+    }
+
+    @Test
+    fun refreshToleratesMissingFieldsAndAMissingRoute() = runTest {
+        server.handler = { json(fixture("share_created.json"), HttpStatusCode.Created) }
+        val repo = repository()
+        repo.create(ID_A)
+        // Before the backend has the route: 404, the links made here stay.
+        server.handler = { error(404, "not_found") }
+        assertFalse(repo.refresh())
+        assertEquals(1, repo.links.value.size)
+        server.offline = true
+        assertFalse(repo.refresh())
+        assertEquals(1, repo.links.value.size)
+        server.offline = false
+        server.handler = { json("""{"shares":[{"shareId":"${created.shareId}","recipeId":"$ID_A","expiresAt":"2026-12-25T10:00:00Z","extra":1}]}""") }
+        assertTrue(repo.refresh())
+        assertEquals(listOf(ShareLink(created.shareId, ID_A, created.url, "2026-12-25T10:00:00Z")), repo.links.value)
+        server.handler = { error(401, "unauthenticated") }
+        assertFalse(repo.refresh())
+        assertEquals(1, unauthorized)
+    }
+
+    @Test
     fun revokeRemovesTheLinkOn204And404() = runTest {
         server.handler = { json(fixture("share_created.json"), HttpStatusCode.Created) }
         val repo = repository()

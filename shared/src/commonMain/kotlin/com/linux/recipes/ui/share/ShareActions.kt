@@ -22,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -72,6 +73,8 @@ import recipes.shared.generated.resources.share_error_picture
 import recipes.shared.generated.resources.share_error_screening
 import recipes.shared.generated.resources.share_link_until
 import recipes.shared.generated.resources.share_links
+import recipes.shared.generated.resources.share_other_device
+import recipes.shared.generated.resources.share_recipients
 import recipes.shared.generated.resources.share_revoke
 import recipes.shared.generated.resources.share_revoke_body
 import recipes.shared.generated.resources.share_revoke_failed
@@ -163,7 +166,8 @@ internal fun ShareContent(services: SharingServices, files: FileActions, recipe:
     val links = all.filter { it.recipeId == recipe.id }
     var copied by remember { mutableStateOf(false) }
     var confirmRevoke by remember { mutableStateOf<ShareLink?>(null) }
-    val created: (ShareLink?) -> Unit = { link -> link?.let { files.shareText(it.url) } }
+    val created: (ShareLink?) -> Unit = { link -> link?.url?.let(files.shareText) }
+    LaunchedEffect(services) { services.shares.refresh() }
 
     Column(
         Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = PageGutter, end = PageGutter, bottom = 24.dp),
@@ -196,19 +200,24 @@ internal fun ShareContent(services: SharingServices, files: FileActions, recipe:
                 ) {
                     // The date part of the ISO 8601 end; readable in every locale.
                     Text(stringResource(Res.string.share_link_until, link.expiresAt.take(10)), style = MaterialTheme.typography.bodyLarge)
+                    link.recipients?.let { Text(stringResource(Res.string.share_recipients, it), style = MaterialTheme.typography.bodyMedium) }
+                    // The link's address exists only on the device that made it; elsewhere only Revoke.
+                    if (link.url == null) Text(stringResource(Res.string.share_other_device), style = MaterialTheme.typography.bodySmall)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { files.shareText(link.url) }, modifier = Modifier.heightIn(min = 48.dp)) {
-                            Text(stringResource(Res.string.share_send))
+                        link.url?.let { url ->
+                            OutlinedButton(onClick = { files.shareText(url) }, modifier = Modifier.heightIn(min = 48.dp)) {
+                                Text(stringResource(Res.string.share_send))
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch {
+                                        clipboard.setClipEntry(plainTextClip(url))
+                                        copied = true
+                                    }
+                                },
+                                modifier = Modifier.heightIn(min = 48.dp),
+                            ) { Text(stringResource(Res.string.share_copy)) }
                         }
-                        OutlinedButton(
-                            onClick = {
-                                scope.launch {
-                                    clipboard.setClipEntry(plainTextClip(link.url))
-                                    copied = true
-                                }
-                            },
-                            modifier = Modifier.heightIn(min = 48.dp),
-                        ) { Text(stringResource(Res.string.share_copy)) }
                         TextButton(onClick = { confirmRevoke = link }, modifier = Modifier.heightIn(min = 48.dp)) {
                             Text(stringResource(Res.string.share_revoke), color = MaterialTheme.colorScheme.error)
                         }

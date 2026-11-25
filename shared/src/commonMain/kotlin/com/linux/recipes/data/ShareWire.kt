@@ -7,6 +7,15 @@ import kotlinx.serialization.Serializable
 /** `POST /recipes/:id/shares`: the only time the app sees [token]; [shareId] revokes the link. */
 @Serializable data class ShareCreated(val shareId: String, val token: String, val expiresAt: String, val url: String)
 
+/**
+ * `GET /shares`: the caller's active links, without tokens. Every field but the ids and the end is optional, so the
+ * app reads the list before and after the backend adds fields.
+ */
+@Serializable data class ShareList(val shares: List<ShareSummary> = emptyList())
+
+@Serializable
+data class ShareSummary(val shareId: String, val recipeId: String, val expiresAt: String, val createdAt: String? = null, val recipients: Int? = null)
+
 /** `POST /shares/open`: the recipe's text only, the number of pictures the copy will get, and the link's end. */
 @Serializable data class SharePreview(val recipe: SharedRecipe, val imageCount: Int, val expiresAt: String)
 

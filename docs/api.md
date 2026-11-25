@@ -648,8 +648,8 @@ Rules:
 ### Client, milestone M5: `data/ShareRepositories.kt`, `data/PdfDownload.kt` and `data/Backup.kt`
 
 ```kotlin
-/** A link this device made. The server keeps no list of an owner's links, so the app keeps its own. */
-data class ShareLink(val shareId: String, val recipeId: String, val url: String, val expiresAt: String)
+/** An active link. [url] only on the device that made it; [recipients] when GET /shares reports it. */
+data class ShareLink(val shareId: String, val recipeId: String, val url: String? = null, val expiresAt: String, val recipients: Int? = null)
 
 sealed interface ShareCreate {
     data class Created(val link: ShareLink) : ShareCreate
@@ -685,8 +685,10 @@ sealed interface ShareAccept {
 }
 
 interface ShareRepository {
-    /** Links made on this device that have not expired or been revoked, newest first. Cleared on sign-out. */
+    /** The user's active links, newest first: from GET /shares once [refresh] worked, else those made here. Cleared on sign-out. */
     val links: StateFlow<List<ShareLink>>
+    /** GET /shares into [links], keeping the URLs of links made here. False when offline or the route is missing (404). */
+    suspend fun refresh(): Boolean
     suspend fun create(recipeId: String): ShareCreate
     /** True once the link is gone on the server (204, or 404 because it no longer exists). */
     suspend fun revoke(shareId: String): Boolean
@@ -728,6 +730,7 @@ class Backup(api: Api, recipes: RecipeRepository, currentToken: () -> String?, o
 
 Rules:
 - Share links are parsed strictly: scheme `https`, the exact host of `API_BASE_URL` (letter case ignored, no port or user), path `/s`, no query, and a fragment that is one token. Anything else is not a share link. On Android the `shareToken` extra is accepted when it has the token's shape.
+- The list of links reads `GET /shares` (fixture `shares_list.json`: `{ "shares": [{ "shareId", "recipeId", "createdAt", "expiresAt", "recipients" }] }`, no tokens); only `shareId`, `recipeId` and `expiresAt` are required and unknown fields are ignored. Until the route exists (404) the links made on the device are the list. A link made on another device shows "Revoke" but no "Copy link".
 - A link opened while signed out is kept in memory and its preview opens right after sign-in.
 - Backup file (UTF-8, one JSON object per line): a header `{"format":"recipes-backup","version":1,"recipes":N,"pictures":M,"pictureBytes":B}`, then N lines `{"type":"recipe","recipe":<RecipeInput>}`, then M lines `{"type":"picture","recipeId":…,"id":…,"mime":…,"size":…,"data":"<base64>"}`. Lines longer than 2,200,000 bytes are skipped unread.
 - Restore keeps the ids of the file. A recipe is first written with only the pictures the server already holds; each picture is then uploaded and attached with a `PUT` on the current `rev`. Unchanged recipes and pictures already attached cause no request, so a second run sends no writes and an interrupted run completes when repeated. Refusals (`recipe_limit`, `recipe_storage_cap`, `storage_cap`, …) are listed and the restore goes on; no connection, 429, 5xx and 401 stop it (`Interrupted`).

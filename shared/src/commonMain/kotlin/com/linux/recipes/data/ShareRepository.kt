@@ -55,6 +55,23 @@ class DefaultShareRepository(
         }
     }
 
+    override suspend fun refresh(): Boolean {
+        val token = currentToken()
+        return when (val result = api.shares()) {
+            is ApiResult.Ok -> {
+                val urls = stored.value.associate { it.shareId to it.url }
+                val links = result.value.shares
+                    .sortedByDescending { it.createdAt.orEmpty() }
+                    .map { ShareLink(it.shareId, it.recipeId, urls[it.shareId], it.expiresAt, it.recipients) }
+                store(links)
+                true
+            }
+            ApiResult.Offline -> false
+            // 404 until the backend has the route: the links made here stay the list.
+            is ApiResult.Failure -> false.also { if (result.status == 401) unauthorized(token) }
+        }
+    }
+
     override suspend fun revoke(shareId: String): Boolean {
         val token = currentToken()
         val result = api.deleteShare(shareId)

@@ -179,6 +179,20 @@ class ShareUiTest : UiTest() {
     }
 
     @Test
+    fun aLinkFromAnotherDeviceCanBeRevokedButNotCopied() = runComposeUiTest {
+        shares.serverLinks = listOf(testLink.copy(shareId = "aa11bb22cc33dd44ee55ff6677889900", url = null, recipients = 3))
+        startWithSharing()
+        openShareSheet()
+        waitForText("Made on another device. Its address is only available there.")
+        waitForText("People who added it: 3")
+        waitForNoText("Copy link")
+        assertEquals(1, shares.refreshes)
+        click("Revoke")
+        clickDialogConfirm("Revoke")
+        waitForNoText("Works until 2026-12-25")
+    }
+
+    @Test
     fun linksOfOtherRecipesAreNotListed() = runComposeUiTest {
         shares.links.value = listOf(testLink.copy(recipeId = shakshuka.id))
         startWithSharing()
