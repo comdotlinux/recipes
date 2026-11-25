@@ -168,15 +168,33 @@ export function resources(env: Env, i: Inputs): Resource[] {
   return out;
 }
 
-/** A phase entrypoint whose rules we own completely: PUT replaces it when our rules differ. */
+/** Rules of this script carry this prefix in their description; every other rule of the zone belongs to other sites. */
+export const RULE_PREFIX = "recipes:";
+
+/**
+ * A zone phase entrypoint shared with the zone's other sites: only rules whose description starts with RULE_PREFIX are
+ * replaced; every other rule is kept in its place and order, and ours follow them (rate-limiting rules must come last
+ * anyway). The planned call names the kept rules, so a run shows what it leaves alone.
+ */
+export function mergeRules(current: unknown, ours: { description: string }[]): { rules: unknown[]; kept: string[]; changed: boolean } {
+  const existing = ((current as { rules?: { description?: string }[] } | null)?.rules ?? []) as { description?: string }[];
+  const others = existing.filter((r) => !(r.description ?? "").startsWith(RULE_PREFIX));
+  const fields = ["description", "expression", "action", "ratelimit"];
+  const mine = existing.filter((r) => (r.description ?? "").startsWith(RULE_PREFIX)).map((r) => pick(r, fields));
+  const changed = !same(mine, ours.map((r) => pick(r, fields)));
+  // Other sites' rule objects are sent back exactly as read, so the PUT does not change them.
+  return { rules: [...others, ...ours], kept: others.map((r) => r.description ?? "(no description)"), changed };
+}
+
 function zoneRules(name: string, path: string, rules: { description: string; expression: string; action: string }[]): Resource {
   return {
     name,
     lookup: { method: "GET", path, why: `read ${name}` },
     decide: (current) => {
-      const have = ((current as { rules?: unknown[] } | null)?.rules ?? []).map((r) => pick(r, ["description", "expression", "action", "ratelimit"]));
-      const want = rules.map((r) => pick(r, ["description", "expression", "action", "ratelimit"]));
-      return same(have, want) ? [] : [{ method: "PUT", path, body: { rules }, why: "rules differ (the phase is owned by this script)" }];
+      const merged = mergeRules(current, rules);
+      if (!merged.changed) return [];
+      const kept = merged.kept.length ? `keeps ${merged.kept.length} rule(s) of other sites: ${merged.kept.join("; ")}` : "keeps every rule of other sites (none seen yet)";
+      return [{ method: "PUT", path, body: { rules: merged.rules }, why: `replace only the "${RULE_PREFIX}" rules; ${kept}` }];
     },
   };
 }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { AI_GATEWAY_LIMIT } from "../backend/src/limits";
-import { dryRun, redact, resources } from "./provision";
+import { dryRun, mergeRules, redact, resources } from "./provision";
 
 const inputs = { account: "acc", zone: "zon", adminEmails: ["op@example.org"] };
 const byName = (env: "staging" | "production", name: string) => resources(env, inputs).find((r) => r.name === name)!;
@@ -52,6 +52,19 @@ describe("provisioning plan", () => {
     for (const name of ["rate limiting rule", "custom WAF rules"]) {
       expect(byName("staging", name).decide(null)).toEqual(byName("production", name).decide(null));
     }
+  });
+
+  test("merges into the zone's rulesets: other sites' rules are kept in place, only ours are replaced", () => {
+    const other = { id: "o1", description: "blog: block bots", expression: "true", action: "block" };
+    const oldOurs = { id: "m1", description: "recipes: old", expression: "false", action: "block" };
+    const ours = [{ description: "recipes: new", expression: "true", action: "block" }];
+    const merged = mergeRules({ rules: [other, oldOurs] }, ours);
+    expect(merged).toEqual({ rules: [other, ...ours], kept: ["blog: block bots"], changed: true });
+    expect(mergeRules({ rules: [other, { ...ours[0], id: "m2" }] }, ours).changed).toBe(false);
+    const call = byName("production", "custom WAF rules").decide({ rules: [other] })[0];
+    expect((call.body as { rules: unknown[] }).rules[0]).toEqual(other);
+    expect(call.why).toContain("blog: block bots");
+    expect(byName("production", "custom WAF rules").decide({ rules: [other, ...(byName("production", "custom WAF rules").decide(null)[0].body as { rules: unknown[] }).rules] })).toEqual([]);
   });
 
   test("the dry run lists every resource as unverified and prints no secret", () => {
