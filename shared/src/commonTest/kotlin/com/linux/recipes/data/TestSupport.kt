@@ -66,13 +66,12 @@ fun HttpRequestData.bodyBytes(): ByteArray = (body as OutgoingContent.ByteArrayC
 
 class MemorySecureStore : SecureStore {
     val values = mutableMapOf<String, String>()
-    override fun get(key: String) = values[key]
-    override fun put(key: String, value: String) {
-        values[key] = value
-    }
-    override fun remove(key: String) {
-        values.remove(key)
-    }
+
+    /** False acts like a Keychain the OS refuses (device locked since boot): nothing is read, written or removed. */
+    var available = true
+    override fun get(key: String) = if (available) values[key] else null
+    override fun put(key: String, value: String) = available.also { if (it) values[key] = value }
+    override fun remove(key: String) = available.also { if (it) values.remove(key) }
 }
 
 class FakeAuthProvider(override val provider: String = "apple", var result: AuthResult = AuthResult.Success("id-token", "auth-code")) :

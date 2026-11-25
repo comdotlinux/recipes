@@ -29,7 +29,11 @@ class AppGraph(
     val baseUrl: String = AppConfig.API_BASE_URL,
 ) {
     val turnstile = TurnstileGate()
-    private val tokens = TokenStore(secureStore.also { clearStaleTokenOnFirstLaunch(Path(filesDir), it) })
+    private val tokens = TokenStore(
+        secureStore.also { clearStaleTokenOnFirstLaunch(Path(filesDir), it) },
+        // Without the marker the next start counts as a first launch and removes the token again.
+        onClearFailed = { SystemFileSystem.delete(Path(filesDir, INSTALL_MARKER), mustExist = false) },
+    )
     private val api = Api(httpClient, baseUrl) { tokens.token }
 
     private val recipeRepositoryImpl: DefaultRecipeRepository = DefaultRecipeRepository(
@@ -56,12 +60,13 @@ class AppGraph(
          * A reinstall starts signed out. iOS Keychain items survive deleting the app, the app's files do not:
          * when the marker file is missing, this is the first launch after installation, so the stored token is
          * removed before anything reads it, and the marker is written. On Android both live in app storage.
+         * A sign-out whose removal failed deletes the marker, so this retries it. The marker is written only once
+         * the removal worked; while the store is unavailable it reads nothing either, so the start is signed out.
          */
         fun clearStaleTokenOnFirstLaunch(filesDir: Path, secureStore: SecureStore, fs: FileSystem = SystemFileSystem) {
             val marker = Path(filesDir, INSTALL_MARKER)
             if (fs.exists(marker)) return
-            secureStore.remove(TokenStore.KEY)
-            secureStore.remove(TokenStore.USER_ID_KEY)
+            if (!(secureStore.remove(TokenStore.KEY) and secureStore.remove(TokenStore.USER_ID_KEY))) return
             fs.createDirectories(filesDir)
             fs.sink(marker).buffered().use { it.write(ByteArray(0)) }
         }

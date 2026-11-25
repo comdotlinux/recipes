@@ -82,6 +82,18 @@ class TurnstileTest {
     }
 
     @Test
+    fun onlyANonBlankStringFromATrustedOriginIsTakenAsTheToken() {
+        assertEquals("tok-123", TurnstilePolicy.messageToken(true, "https", "recipe.munich-tech.de", 0, base, "tok-123"))
+        assertNull(TurnstilePolicy.messageToken(true, "https", "recipe.munich-tech.de", 0, base, " "), "blank")
+        assertNull(TurnstilePolicy.messageToken(true, "https", "recipe.munich-tech.de", 0, base, 123), "not a string")
+        assertNull(TurnstilePolicy.messageToken(true, "https", "recipe.munich-tech.de", 0, base, null), "no body")
+        assertNull(TurnstilePolicy.messageToken(false, "https", "recipe.munich-tech.de", 0, base, "tok-123"), "child frame")
+        assertNull(TurnstilePolicy.messageToken(true, "https", "evil.example", 0, base, "tok-123"), "other host")
+        assertNull(TurnstilePolicy.messageToken(true, "http", "recipe.munich-tech.de", 0, base, "tok-123"), "other scheme")
+        assertNull(TurnstilePolicy.messageToken(true, "https", "recipe.munich-tech.de", 8443, base, "tok-123"), "other port")
+    }
+
+    @Test
     fun gateHandsTheTokenToTheWaitingSignIn() = runTest {
         val gate = TurnstileGate()
         assertFalse(gate.pending.value)

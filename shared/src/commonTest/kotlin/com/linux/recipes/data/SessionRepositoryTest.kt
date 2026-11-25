@@ -8,6 +8,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.async
@@ -257,6 +258,46 @@ class SessionRepositoryTest {
         storeSession() // signed in during that first run
         val second = AppGraph(filesDir = filesDir.toString(), secureStore = secure, authProvider = auth, httpClient = server.client, baseUrl = BASE)
         assertEquals(SessionState.SignedIn(userId), second.session.state.value)
+    }
+
+    @Test
+    fun signOutWithAnUnavailableStoreEndsTheSessionAndRemovesTheTokenAtTheNextStart() = runTest {
+        val filesDir = tempDir()
+        AppGraph.clearStaleTokenOnFirstLaunch(filesDir, secure)
+        storeSession()
+        val graph = AppGraph(filesDir = filesDir.toString(), secureStore = secure, authProvider = auth, httpClient = server.client, baseUrl = BASE)
+        server.handler = { empty(204) }
+        secure.available = false // for example locked since boot
+
+        graph.session.signOut()
+
+        assertEquals(SessionState.SignedOut, graph.session.state.value)
+        assertTrue(secure.values.isNotEmpty(), "the store kept the token")
+        assertFalse(kotlinx.io.files.SystemFileSystem.exists(Path(filesDir, AppGraph.INSTALL_MARKER)), "removal is retried")
+
+        val stillUnavailable = AppGraph(filesDir = filesDir.toString(), secureStore = secure, authProvider = auth, httpClient = server.client, baseUrl = BASE)
+        assertEquals(SessionState.SignedOut, stillUnavailable.session.state.value)
+        assertFalse(kotlinx.io.files.SystemFileSystem.exists(Path(filesDir, AppGraph.INSTALL_MARKER)), "still to be retried")
+
+        secure.available = true
+        val next = AppGraph(filesDir = filesDir.toString(), secureStore = secure, authProvider = auth, httpClient = server.client, baseUrl = BASE)
+        assertEquals(SessionState.SignedOut, next.session.state.value)
+        assertEquals(emptyMap(), secure.values)
+        assertTrue(kotlinx.io.files.SystemFileSystem.exists(Path(filesDir, AppGraph.INSTALL_MARKER)))
+    }
+
+    @Test
+    fun signInWithAnUnavailableStoreKeepsTheSessionForThisRunOnly() = runTest {
+        serveSession()
+        secure.available = false
+        val signIn = async { repo.signIn(true) }
+        gate.pending.first { it }
+        gate.deliver("ts")
+        assertEquals(SignInResult.Success, signIn.await())
+        assertEquals(SessionState.SignedIn(userId), repo.state.value)
+        assertEquals(sessionToken, tokens.token)
+        secure.available = true
+        assertEquals(SessionState.SignedOut, DefaultSessionRepository(server.api(), auth, gate, TokenStore(secure)) {}.state.value)
     }
 
     @Test

@@ -37,18 +37,26 @@ class AndroidSecureStore(
         }
     }
 
-    override fun put(key: String, value: String) {
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, secretKey())
-        val data = cipher.iv + cipher.doFinal(value.encodeToByteArray())
+    override fun put(key: String, value: String): Boolean {
+        val target = file(key)
+        val data = try {
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.ENCRYPT_MODE, secretKey())
+            cipher.iv + cipher.doFinal(value.encodeToByteArray())
+        } catch (e: GeneralSecurityException) {
+            return false.also { Log.w(TAG, "could not encrypt '$key': ${e::class.simpleName}") }
+        } catch (e: ProviderException) {
+            return false.also { Log.w(TAG, "could not encrypt '$key': ${e::class.simpleName}") }
+        }
         dir.mkdirs()
         val tmp = File(dir, "$key.tmp")
         tmp.writeBytes(data)
-        check(tmp.renameTo(file(key))) { "could not store $key" }
+        return tmp.renameTo(target).also { if (!it) Log.w(TAG, "could not store '$key'") }
     }
 
-    override fun remove(key: String) {
-        file(key).delete()
+    override fun remove(key: String): Boolean {
+        val file = file(key)
+        return (file.delete() || !file.exists()).also { if (!it) Log.w(TAG, "could not remove '$key'") }
     }
 
     /** A value the Keystore can no longer decrypt (key gone after a data clear or restore) is removed: signed out. */

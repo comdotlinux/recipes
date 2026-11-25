@@ -1,12 +1,12 @@
 package com.linux.recipes.ui
 
+import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.v2.runComposeUiTest
-import com.linux.recipes.App
 import com.linux.recipes.UiTest
 import com.linux.recipes.platform.TurnstileGate
 import com.linux.recipes.ui.signin.TurnstileChallenge
@@ -65,18 +65,23 @@ class SignInUiTest : UiTest() {
     @Test
     fun turnstileCheckIsShownAndClosingItCancelsSignIn() = runComposeUiTest {
         val gate = TurnstileGate()
-        val session = FakeSessionRepository(turnstile = gate)
-        setContent { App(session, FakeRecipeRepository(), darkTheme = false, TurnstileChallenge(gate, "https://example.com")) }
-        click("I am 16 or older")
-        click("Sign in")
-        waitForText("One quick check")
-        click("Cancel")
-        waitForText("Sign-in was cancelled. You can try again whenever you are ready.")
-        waitForNoText("One quick check")
-
-        click("Sign in")
-        waitForText("One quick check")
-        runOnIdle { gate.deliver("token") }
-        waitForText("Your recipe box is empty")
+        setApp(FakeSessionRepository(turnstile = gate), FakeRecipeRepository(), turnstile = TurnstileChallenge(gate, "https://example.com"))
+        closeThenPassTheTurnstileCheck(gate)
     }
+}
+
+/** Closing the check cancels sign-in; a token from the page signs in. */
+@OptIn(ExperimentalTestApi::class)
+fun ComposeUiTest.closeThenPassTheTurnstileCheck(gate: TurnstileGate) {
+    click("I am 16 or older")
+    click("Sign in")
+    waitForText("One quick check")
+    click("Cancel")
+    waitForText("Sign-in was cancelled. You can try again whenever you are ready.")
+    waitForNoText("One quick check")
+
+    click("Sign in")
+    waitForText("One quick check")
+    runOnIdle { gate.deliver("token") }
+    waitForText("Your recipe box is empty")
 }

@@ -15,21 +15,31 @@ import kotlinx.coroutines.flow.asStateFlow
  * The token is opaque (docs/api.md, "Authentication"): the app never parses it, so the user id from
  * `SessionResponse` is stored next to it.
  */
-class TokenStore(private val secure: SecureStore) {
+class TokenStore(
+    private val secure: SecureStore,
+    /** Called when sign-out could not remove the stored values; the app then removes them at its next start. */
+    private val onClearFailed: () -> Unit = {},
+) {
     @Volatile
     var token: String? = secure.get(KEY)
         private set
 
+    /**
+     * The session lives in memory even when the store refuses it; the next start is then signed out.
+     * A token without its user id is cleared at start ([DefaultSessionRepository]), so a half write is safe.
+     */
     fun save(token: String, userId: String) {
         secure.put(USER_ID_KEY, userId)
         secure.put(KEY, token)
         this.token = token
     }
 
+    /** Ends the session in memory whatever the store answers. */
     fun clear() {
-        secure.remove(KEY)
-        secure.remove(USER_ID_KEY)
+        // `and`, not `&&`: both removals are attempted.
+        val removed = secure.remove(KEY) and secure.remove(USER_ID_KEY)
         token = null
+        if (!removed) onClearFailed()
     }
 
     /** The signed-in user, or null when either value is missing. */
