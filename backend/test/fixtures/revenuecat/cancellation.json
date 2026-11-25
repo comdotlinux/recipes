@@ -1,0 +1,38 @@
+{
+  "api_version": "1.0",
+  "event": {
+    "aliases": [
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    ],
+    "app_id": "app0000000",
+    "app_user_id": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "commission_percentage": 0.15,
+    "country_code": "DE",
+    "currency": "EUR",
+    "entitlement_id": null,
+    "entitlement_ids": [
+      "recipes_pro"
+    ],
+    "environment": "SANDBOX",
+    "event_timestamp_ms": 1764000000000,
+    "expiration_at_ms": 1766592000000,
+    "is_family_share": false,
+    "offer_code": null,
+    "original_app_user_id": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "original_transaction_id": "1000000000000001",
+    "period_type": "NORMAL",
+    "presented_offering_id": null,
+    "price": 0.0,
+    "price_in_purchased_currency": 0.0,
+    "product_id": "monthly",
+    "purchased_at_ms": 1764000000000,
+    "store": "APP_STORE",
+    "subscriber_attributes": {},
+    "takehome_percentage": 0.85,
+    "tax_percentage": 0.0,
+    "transaction_id": "1000000000000001",
+    "type": "CANCELLATION",
+    "id": "00000000-0000-4000-8000-000000000004",
+    "cancel_reason": "UNSUBSCRIBE"
+  }
+}
