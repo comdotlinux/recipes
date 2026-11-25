@@ -9,6 +9,7 @@ import { fetchPage } from "./ai/fetch-url";
 import { AI_NOTICE_VERSION, ConsentRequired, type ModelRunner } from "./ai/gateway";
 import { type ImportOutcome, structureRecipe } from "./ai/structure";
 import { transcribePhoto } from "./ai/transcribe";
+import { type Entitlement, type EntitlementSource, NONE, endOf, revenueCat } from "./billing/revenuecat";
 
 export const DAY_MS = 86_400_000;
 export const SESSION_TTL_MS = 30 * DAY_MS;
@@ -27,6 +28,21 @@ export const JOB_RESULT_DAYS = 7;
 export const ATTEMPTS_PER_DAY = 10;
 export const FREE_REFUND_LIMIT = 5;
 export const REPORT_DAYS = 90;
+/** Plan 4.6: with RevenueCat unreachable, a stored entitlement is honoured this long after its end. */
+export const OFFLINE_HONOUR_MS = DAY_MS;
+/** After a failed RevenueCat call, requests use the stored entitlement for this long instead of calling again. */
+export const REFRESH_RETRY_MS = 60_000;
+/** POST /entitlement/refresh at most once per this interval per user. */
+export const CLIENT_REFRESH_MS = 5_000;
+/** A webhook-triggered refresh is retried with backoff (storage/tasks.ts) at most this many times. */
+export const REFRESH_TASK_TRIES = 10;
+
+/** Plan 4.6: active means now is before the end (grace period included); while RevenueCat is unreachable, 24 hours longer. */
+export function entitled(e: Entitlement, now: number, reachable: boolean): boolean {
+	if (!e.active) return false;
+	const end = endOf(e);
+	return end === null || now < end || (!reachable && now < end + OFFLINE_HONOUR_MS);
+}
 
 export type ImportInput = { kind: "url"; url: string } | { kind: "text"; text: string } | { kind: "photo"; bytes: ArrayBuffer };
 type JobRow = { job_key: string; kind: string; status: string; input: string | null; input_blob: ArrayBuffer | null; created_at: number; result_json: string | null; charge: string | null; period: string | null };
@@ -55,11 +71,11 @@ export class UserDO extends DurableObject<Env> {
 		});
 	}
 
-	private meta(key: string): string | null {
+	protected meta(key: string): string | null {
 		return this.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = ?", key).toArray()[0]?.value ?? null;
 	}
 
-	private setMeta(key: string, value: string): void {
+	protected setMeta(key: string, value: string): void {
 		this.sql.exec("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", key, value);
 	}
 
@@ -84,7 +100,7 @@ export class UserDO extends DurableObject<Env> {
 		return true;
 	}
 
-	private async run(group: string, secretHash: string, op: (now: number) => Result | Promise<Result>, write = false): Promise<Result> {
+	protected async run(group: string, secretHash: string, op: (now: number) => Result | Promise<Result>, write = false): Promise<Result> {
 		const now = Date.now();
 		if (!this.authenticate(secretHash, now)) return error(401, "unauthenticated", "missing, unknown or expired session");
 		// Per-user write limit, applied only after the session is accepted; the object id stands for the user.
@@ -118,9 +134,8 @@ export class UserDO extends DurableObject<Env> {
 		return total;
 	}
 
-	private capBytes(): number {
-		const entitlement = JSON.parse(this.meta("entitlement") ?? '{"active":false}') as { active: boolean };
-		return entitlement.active ? SUBSCRIBER_CAP_BYTES : FREE_CAP_BYTES;
+	private capBytes(subscribed: boolean): number {
+		return subscribed ? SUBSCRIBER_CAP_BYTES : FREE_CAP_BYTES;
 	}
 
 	private usedBytes(exceptImageId = ""): number {
@@ -161,9 +176,9 @@ export class UserDO extends DurableObject<Env> {
 	}
 
 	me(secretHash: string, userId: string): Promise<Result> {
-		return this.run("me", secretHash, () => {
+		return this.run("me", secretHash, async (now) => {
+			const billing = this.billingView(await this.entitledNow(now), now);
 			const state = this.meta("state") ?? "active";
-			const entitlement = JSON.parse(this.meta("entitlement") ?? '{"active":false,"expiresAt":null}') as { active: boolean; expiresAt: string | null };
 			const consent = this.meta("consent_version");
 			return {
 				status: 200,
@@ -171,14 +186,21 @@ export class UserDO extends DurableObject<Env> {
 					userId,
 					state,
 					suspension: state === "suspended" ? { reason: this.meta("suspension_reason") } : null,
-					entitlement: { active: entitlement.active, expiresAt: entitlement.expiresAt },
-					// monthUsed: imports and their usage table arrive in M2; until then no import can have been counted.
-					quota: { freeImportUsed: this.meta("free_import_used_at") !== null, monthUsed: this.monthUsed(Date.now()), monthLimit: MONTH_LIMIT },
-					storage: { usedBytes: this.usedBytes(), capBytes: this.capBytes() },
+					...billing,
 					consentVersion: consent === null ? null : Number(consent),
 				},
 			};
 		});
+	}
+
+	/** The entitlement, quota and storage parts of GET /me; also the answer of POST /entitlement/refresh. */
+	protected billingView(subscribed: boolean, now: number) {
+		const end = endOf(this.storedEntitlement());
+		return {
+			entitlement: { active: subscribed, expiresAt: subscribed && end !== null ? isoTime(end) : null },
+			quota: { freeImportUsed: this.meta("free_import_used_at") !== null, monthUsed: this.monthUsed(now), monthLimit: MONTH_LIMIT },
+			storage: { usedBytes: this.usedBytes(), capBytes: this.capBytes(subscribed) },
+		};
 	}
 
 	// ---- recipes ----
@@ -253,13 +275,16 @@ export class UserDO extends DurableObject<Env> {
 	// ---- images ----
 
 	putImage(secretHash: string, recipeId: string, imageId: string, mime: string, bytes: ArrayBuffer): Promise<Result> {
-		return this.run("images", secretHash, () => {
+		return this.run("images", secretHash, async (now) => {
+			// Before the checks below: they and the insert must run without an await in between.
+			const subscribed = await this.entitledNow(now);
 			if (!this.sql.exec("SELECT 1 FROM recipes WHERE id = ? AND deleted = 0", recipeId).toArray().length) return error(404, "not_found", "recipe not found");
 			const owner = this.sql.exec<{ recipe_id: string }>("SELECT recipe_id FROM images WHERE id = ?", imageId).toArray()[0];
 			if (owner && owner.recipe_id !== recipeId) return error(404, "not_found", "image belongs to another recipe");
 			const count = this.sql.exec<{ n: number }>("SELECT count(*) AS n FROM images WHERE recipe_id = ? AND id != ?", recipeId, imageId).one().n;
 			if (count >= MAX_IMAGES_PER_RECIPE) return error(409, "image_limit", `at most ${MAX_IMAGES_PER_RECIPE} images per recipe`);
-			if (this.usedBytes(imageId) + bytes.byteLength > this.capBytes()) return error(413, "storage_cap", "storage cap reached");
+			// A lapsed subscriber above the free cap keeps everything; only new uploads are refused (plan 4.6, AC8).
+			if (this.usedBytes(imageId) + bytes.byteLength > this.capBytes(subscribed)) return error(413, "storage_cap", "storage cap reached");
 			this.sql.exec(
 				"INSERT INTO images (id, recipe_id, mime, bytes, size) VALUES (?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET mime = excluded.mime, bytes = excluded.bytes, size = excluded.size",
 				imageId,
@@ -314,19 +339,14 @@ export class UserDO extends DurableObject<Env> {
 		return this.sql.exec<{ count: number }>("SELECT count FROM usage WHERE period = ?", month(now)).toArray()[0]?.count ?? 0;
 	}
 
-	/** Subscription state as stored; M3 writes it from RevenueCat. Until then nothing in production sets it. */
-	private subscribed(now: number): boolean {
-		const e = JSON.parse(this.meta("entitlement") ?? '{"active":false,"expiresAt":null}') as { active: boolean; expiresAt: string | null };
-		return e.active && (e.expiresAt === null || now < Date.parse(e.expiresAt));
-	}
-
 	/** Charges one unit: the free lifetime unit first, then a monthly unit while subscribed. Null when none is left. */
-	private reserve(now: number): { charge: "free" | "month"; period: string | null } | null {
+	private reserve(now: number, subscribed: boolean): { charge: "free" | "month"; period: string | null } | null {
 		if (this.meta("free_import_used_at") === null) {
 			this.setMeta("free_import_used_at", String(now));
 			return { charge: "free", period: null };
 		}
-		if (this.subscribed(now) && this.monthUsed(now) < MONTH_LIMIT) {
+		// The count is kept per UTC month, so a lapse and a resubscription in the same month continue it.
+		if (subscribed && this.monthUsed(now) < MONTH_LIMIT) {
 			this.sql.exec("INSERT INTO usage (period, count) VALUES (?, 1) ON CONFLICT (period) DO UPDATE SET count = count + 1", month(now));
 			return { charge: "month", period: month(now) };
 		}
@@ -364,6 +384,8 @@ export class UserDO extends DurableObject<Env> {
 
 	startImport(secretHash: string, jobKey: string, input: ImportInput): Promise<Result> {
 		return this.run("imports", secretHash, async (now) => {
+			// The only await: everything below, from the idempotency check to the insert, runs in one synchronous step.
+			const subscribed = await this.entitledNow(now);
 			const existing = this.job(jobKey);
 			if (existing) return { ...this.jobView(existing), status: 202 };
 			if (this.consentVersion() !== AI_NOTICE_VERSION) return error(403, "consent_required", "accept the AI notice first");
@@ -374,7 +396,7 @@ export class UserDO extends DurableObject<Env> {
 				this.event({ event: "quota_denied", reason: "attempt_limit" });
 				return error(429, "attempt_limit", "too many failed imports today");
 			}
-			const unit = this.reserve(now);
+			const unit = this.reserve(now, subscribed);
 			if (!unit) {
 				this.event({ event: "quota_denied", reason: "quota_exhausted" });
 				return error(402, "quota_exhausted", "no import left");
@@ -432,7 +454,9 @@ export class UserDO extends DurableObject<Env> {
 			job.job_key,
 		);
 		if (outcome.status !== "done") this.refund(job);
-		if (outcome.status === "guard_block" || outcome.status === "no_recipe" || outcome.status === "invalid") {
+		// A failed job on a monthly unit also counts, so failing imports cannot run unlimited model calls (docs/api.md, M3).
+		const counted = outcome.status === "guard_block" || outcome.status === "no_recipe" || outcome.status === "invalid";
+		if (counted || (outcome.status === "failed" && job.charge === "month")) {
 			this.sql.exec("INSERT INTO attempts (day, count) VALUES (?, 1) ON CONFLICT (day) DO UPDATE SET count = count + 1", day(now));
 		}
 		this.sql.exec("DELETE FROM tasks WHERE id IN (?, ?)", `job:${job.job_key}`, `job_timeout:${job.job_key}`);
@@ -496,6 +520,82 @@ export class UserDO extends DurableObject<Env> {
 		if (job && OPEN.includes(job.status)) this.finish(job, { status: "failed" }, now);
 	}
 
+	// ---- subscription (plan 4.6) ----
+
+	private storedEntitlement(): Entitlement {
+		return { ...NONE, ...(JSON.parse(this.meta("entitlement") ?? "{}") as Partial<Entitlement>) };
+	}
+
+	/** The RevenueCat REST client; null without an API key. The local entry's subclass supplies a stand-in there. */
+	protected entitlementSource(): EntitlementSource | null {
+		return this.env.REVENUECAT_API_KEY ? revenueCat(this.env) : null;
+	}
+
+	/** Reads the subscriber record and stores it. Null when RevenueCat is unreachable; the stored entitlement then stays. */
+	protected async refreshEntitlement(now: number, trigger: string): Promise<Entitlement | null> {
+		const source = this.entitlementSource();
+		// The object's name is the user id (api.ts userObject), which is also the RevenueCat app user id (Purchases.logIn).
+		const userId = this.ctx.id.name;
+		const fresh = source && userId ? await source(userId, now) : null;
+		if (fresh) {
+			this.setMeta("entitlement", JSON.stringify(fresh));
+			this.sql.exec("DELETE FROM meta WHERE key = 'entitlement_failed_at'");
+		} else {
+			this.setMeta("entitlement_failed_at", String(now));
+		}
+		this.event({ event: "entitlement_refresh", trigger, outcome: fresh ? (fresh.active ? "active" : "inactive") : "unavailable" });
+		return fresh;
+	}
+
+	/** Entitled now? A stored entitlement that has run out is refreshed first, so a renewal counts before its webhook arrives. */
+	private async entitledNow(now: number): Promise<boolean> {
+		const stored = this.storedEntitlement();
+		const end = endOf(stored);
+		if (!stored.active || end === null || now < end) return entitled(stored, now, true);
+		const recentFailure = now - Number(this.meta("entitlement_failed_at") ?? "0") < REFRESH_RETRY_MS;
+		const fresh = recentFailure ? null : await this.refreshEntitlement(now, "stale");
+		return fresh ? entitled(fresh, now, true) : entitled(stored, now, false);
+	}
+
+	refreshFromClient(secretHash: string): Promise<Result> {
+		return this.run("billing", secretHash, async (now) => {
+			if (now - Number(this.meta("entitlement_client_at") ?? "0") < CLIENT_REFRESH_MS) return error(429, "rate_limited", "refresh at most every 5 seconds");
+			this.setMeta("entitlement_client_at", String(now));
+			const fresh = await this.refreshEntitlement(now, "client");
+			if (!fresh) {
+				await this.scheduleRefresh(Date.now());
+				return error(503, "billing_unavailable", "the subscription service could not be reached; retried in the background");
+			}
+			return { status: 200, body: this.billingView(entitled(fresh, now, true), now) };
+		}, true);
+	}
+
+	private scheduleRefresh(now: number): Promise<void> {
+		return schedule(this.ctx.storage, { id: "entitlement_refresh", kind: "entitlement_refresh", dueAt: now }, true);
+	}
+
+	/**
+	 * Webhook trigger: the payload is not trusted, only this call. An id without an account gets no tables and a
+	 * deleting account is left alone; both answer false. Replays and out-of-order events only cause another refresh.
+	 */
+	async entitlementChanged(): Promise<boolean> {
+		if (schemaVersion(this.sql) === 0) return false;
+		const state = this.meta("state");
+		if (state === null || state === "deleting") return false;
+		await this.scheduleRefresh(Date.now());
+		return true;
+	}
+
+	/** Alarm task: a refresh that fails is retried by the dispatcher with backoff, at most REFRESH_TASK_TRIES times. */
+	async refreshTask(now: number, attempts: number): Promise<void> {
+		if (this.meta("state") === "deleting") return;
+		if (attempts >= REFRESH_TASK_TRIES) {
+			this.event({ event: "entitlement_refresh", trigger: "webhook", outcome: "gave_up" });
+			return;
+		}
+		if (!(await this.refreshEntitlement(now, "webhook"))) throw new Error("subscription service unavailable");
+	}
+
 	// ---- tasks ----
 
 	private scheduleExpiry(dueAt: number): Promise<void> {
@@ -540,6 +640,7 @@ export class UserDO extends DurableObject<Env> {
 				expiry: (_payload, now) => this.expire(now),
 				job: (payload, now, attempts) => this.runJob(payload!, now, attempts),
 				job_timeout: (payload, now) => this.timeoutJob(payload!, now),
+				entitlement_refresh: (_payload, now, attempts) => this.refreshTask(now, attempts),
 			},
 			Date.now(),
 		);
