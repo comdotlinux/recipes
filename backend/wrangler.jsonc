@@ -10,6 +10,9 @@
   "name": "recipes",
   "main": "src/index.ts",
   "compatibility_date": "2026-11-23",
+  // fetch() to a hostname of our own zone goes through Cloudflare's front door, not straight to the origin
+  // (https://developers.cloudflare.com/workers/configuration/compatibility-flags/, "Global fetch() strictly public", checked 2026-11-24).
+  "compatibility_flags": ["global_fetch_strictly_public"],
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/v1/*", "/turnstile.html"] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["UserDO"] }],
   "durable_objects": { "bindings": [{ "name": "USER_DO", "class_name": "UserDO" }] },

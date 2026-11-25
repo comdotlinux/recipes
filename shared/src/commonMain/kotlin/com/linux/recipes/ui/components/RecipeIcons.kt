@@ -38,6 +38,12 @@ object RecipeIcons {
     val Down = line("down", "M12 5v14 M6 13l6 6l6 -6")
     val External = line("external", "M14 5h5v5 M19 5l-8 8 M17 14v5H5V7h5")
     val SignOut = line("sign_out", "M10 5H5v14h5 M15 8l4 4l-4 4 M19 12H9")
+    val Import = line("import", "M12 4v10.5 M7.5 10l4.5 4.5l4.5 -4.5 M5 19.5h14")
+    val Link = line(
+        "link",
+        "M10.2 13.8a3.8 3.8 0 0 0 5.4 0l3 -3a3.8 3.8 0 0 0 -5.4 -5.4l-1 1 M13.8 10.2a3.8 3.8 0 0 0 -5.4 0l-3 3a3.8 3.8 0 0 0 5.4 5.4l1 -1",
+    )
+    val Check = line("check", "M5 12.5l4.5 4.5L19 7.5")
     val Tag = line("tag", "M4 4h7.5l8.5 8.5l-7.5 7.5L4 11.5z M8.2 7a1.2 1.2 0 1 0 0 2.4a1.2 1.2 0 1 0 0 -2.4z")
 
     private fun line(name: String, path: String): ImageVector =

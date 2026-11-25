@@ -54,6 +54,13 @@ enum class ErrorCode(val wire: String) {
     StorageCap("storage_cap"),
     ImageLimit("image_limit"),
     UnsupportedMediaType("unsupported_media_type"),
+    ConsentVersionUnknown("consent_version_unknown"),
+    ConsentRequired("consent_required"),
+    QuotaExhausted("quota_exhausted"),
+    JobRunning("job_running"),
+    AttemptLimit("attempt_limit"),
+    InvalidUrl("invalid_url"),
+    TextTooLarge("text_too_large"),
     Unknown("unknown"),
     ;
 
@@ -98,6 +105,8 @@ data class Me(
     val quota: Quota,
     val storage: Storage,
     val consentVersion: Int? = null,
+    /** The user's import job that is still pending or running, if any. */
+    val openJobId: String? = null,
 ) {
     @Serializable data class Suspension(val reason: String)
     @Serializable data class Entitlement(val active: Boolean, val expiresAt: String? = null)
@@ -110,12 +119,32 @@ data class Me(
 
 @Serializable data class ImageInfo(val id: String, val size: Long, val mime: String)
 
+@Serializable data class ConsentRequest(val version: Int)
+
+@Serializable data class ConsentResponse(val consentVersion: Int)
+
+/** `POST /imports` JSON body: kind `url` with [url], or kind `text` with [text]. Photos go as raw JPEG instead. */
+@Serializable
+@OptIn(ExperimentalSerializationApi::class)
+data class ImportRequest(
+    val kind: String,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val url: String? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val text: String? = null,
+)
+
+/** `status`: pending, running, done, guard_block, no_recipe, invalid or failed. [draft] only when done. */
+@Serializable
+data class ImportJob(val id: String, val kind: String, val status: String, val createdAt: String, val draft: RecipeInput? = null)
+
+/** `POST /reports`; [reason] is wrong_content, offensive or other. */
+@Serializable data class Report(val kind: String, val jobId: String, val reason: String, val note: String)
+
 @Serializable
 private data class ErrorBody(val error: Detail) {
     @Serializable data class Detail(val code: String, val message: String = "")
 }
 
-/** One function per M1 route of docs/api.md. Never throws except for cancellation. */
+/** One function per M1 and M2 route of docs/api.md. Never throws except for cancellation. */
 class Api(
     private val http: HttpClient,
     private val baseUrl: String,
@@ -160,6 +189,43 @@ class Api(
 
     suspend fun image(imageId: String): ApiResult<ByteArray> = call { get(url("/images/$imageId")) { auth() } }
 
+    suspend fun putConsent(version: Int): ApiResult<ConsentResponse> = call {
+        put(url("/me/consent")) {
+            auth()
+            json(ConsentRequest(version))
+        }
+    }
+
+    suspend fun deleteConsent(): ApiResult<Unit> = call { delete(url("/me/consent")) { auth() } }
+
+    /** [jobId] is the Idempotency-Key: the same key returns the same job and charges nothing more. */
+    suspend fun startImport(jobId: String, request: ImportRequest): ApiResult<ImportJob> = call {
+        post(url("/imports")) {
+            auth()
+            header(IDEMPOTENCY_KEY, jobId)
+            json(request)
+        }
+    }
+
+    /** Kind `photo`: the raw JPEG as the body. */
+    suspend fun startPhotoImport(jobId: String, jpeg: ByteArray): ApiResult<ImportJob> = call {
+        post(url("/imports")) {
+            auth()
+            header(IDEMPOTENCY_KEY, jobId)
+            contentType(ContentType.Image.JPEG)
+            setBody(jpeg)
+        }
+    }
+
+    suspend fun job(jobId: String): ApiResult<ImportJob> = call { get(url("/jobs/$jobId")) { auth() } }
+
+    suspend fun report(report: Report): ApiResult<Unit> = call {
+        post(url("/reports")) {
+            auth()
+            json(report)
+        }
+    }
+
     private fun url(path: String) = "$baseUrl/v1$path"
 
     private fun HttpRequestBuilder.auth() {
@@ -197,6 +263,8 @@ class Api(
     }
 
     companion object {
+        const val IDEMPOTENCY_KEY = "Idempotency-Key"
+
         /** Sends every field, nulls included, so request bodies match the contract exactly. */
         val apiJson = Json {
             ignoreUnknownKeys = true

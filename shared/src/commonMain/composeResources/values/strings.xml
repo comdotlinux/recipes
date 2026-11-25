@@ -136,4 +136,73 @@
     <string name="settings_imprint">Imprint</string>
     <string name="settings_terms">Terms of use</string>
     <string name="settings_opens_browser">Opens in your browser</string>
+    <string name="settings_ai">AI imports</string>
+    <string name="settings_ai_given">You allowed imports with AI.</string>
+    <string name="settings_ai_not_given">Recipes asks for your consent before your first import with AI.</string>
+    <string name="settings_ai_withdraw">Withdraw consent</string>
+    <string name="settings_ai_withdraw_title">Withdraw consent for AI imports?</string>
+    <string name="settings_ai_withdraw_body">Recipes will ask again before your next import. Your saved recipes stay as they are.</string>
+    <string name="settings_ai_withdraw_confirm">Withdraw</string>
+    <string name="settings_ai_withdraw_failed">Consent could not be withdrawn. Check your connection and try again.</string>
+
+    <!-- AI import -->
+    <string name="import_action">Import</string>
+    <string name="import_empty_action">Import a recipe</string>
+    <string name="import_sheet_title">Import a recipe</string>
+    <string name="import_sheet_body">Paste a link to a recipe page, or photograph a recipe from a book or card.</string>
+    <string name="import_first_free">One AI import is free: a link, or AI help with a photo. After that, AI imports come with Recipes Pro.</string>
+    <string name="import_link_label">Link to a recipe</string>
+    <string name="import_choose_gallery">Choose from gallery</string>
+    <string name="import_running">Reading your recipe… this can take up to a minute. You can keep using the app.</string>
+    <string name="import_waiting_offline">You are offline. The import continues when you are back.</string>
+    <string name="import_ready">Your recipe is ready</string>
+    <string name="import_review">Review</string>
+    <string name="import_dismiss">Dismiss</string>
+    <string name="import_try_again">Try again</string>
+    <string name="import_type_instead">Type it in instead</string>
+    <string name="import_guard_blocked">This content cannot be imported.</string>
+    <string name="import_no_recipe">No recipe found in this link or photo.</string>
+    <string name="import_invalid">The result was incomplete. Try another source.</string>
+    <string name="import_failed">The import did not finish. Please try again.</string>
+    <string name="import_free_kept">Your free import was not used.</string>
+    <string name="import_offline_start">Connect to the internet to import.</string>
+    <string name="import_attempt_limit">Too many imports today. Try again tomorrow.</string>
+    <string name="import_invalid_url">This link cannot be imported.</string>
+    <string name="import_rejected">This could not be imported. Try another link or photo.</string>
+    <string name="import_paywall_title">You have used your free import.</string>
+    <string name="import_paywall_body">More AI imports come with Recipes Pro. Typing recipes in stays free and unlimited.</string>
+    <string name="review_title">Review import</string>
+    <string name="review_hint">Check the recipe before you save it. Nothing is in your recipes until you save.</string>
+    <string name="review_discard_title">Discard this import?</string>
+    <string name="review_discard_body">The imported recipe has not been saved and will be gone.</string>
+    <string name="report_action">Report a problem with this result</string>
+    <string name="report_title">Report a problem</string>
+    <string name="report_reason_wrong">The recipe is wrong or incomplete</string>
+    <string name="report_reason_offensive">The result is offensive</string>
+    <string name="report_reason_other">Something else</string>
+    <string name="report_note">Note (optional)</string>
+    <string name="report_send">Send</string>
+    <string name="report_sent">Thank you. We will look at this result.</string>
+    <string name="report_failed">The report could not be sent. Please try again.</string>
+    <string name="import_photos_free">Photos are read on your phone, free and unlimited.</string>
+    <string name="import_reading_photo">Reading the photo on your phone…</string>
+    <string name="import_local_note">This photo was read on your phone. Nothing was sent.</string>
+    <string name="import_tidy_up">Tidy up with AI</string>
+    <string name="import_tidy_up_title">Tidy up with AI?</string>
+    <string name="import_tidy_up_body">AI makes a new draft from the text your phone read. The text read from the photo is sent, not your changes. This draft is not kept.</string>
+    <string name="import_tidy_up_confirm">Tidy up</string>
+    <string name="import_unreadable_title">Your phone could not read this picture.</string>
+    <string name="import_unreadable_body">AI can try to read it, for example handwriting. The photo is then sent to our server.</string>
+    <string name="import_read_with_ai">Read it with AI</string>
+
+    <!-- AI notice, shown before the first import.
+         Source: https://developers.cloudflare.com/workers-ai/platform/data-usage/ read 2026-11-24.
+         The text must change if any model is not a Workers AI model. -->
+    <string name="consent_title">Importing with AI.</string>
+    <string name="consent_body_send">To turn a link or photo into a recipe, Recipes sends it to our server on Cloudflare.</string>
+    <string name="consent_body_kinds">A link: our server loads the page. A photo: your phone reads it, and the text is sent only when you ask for AI help with it. The photo itself is sent only when your phone cannot read it and you ask AI to read it, for example handwriting.</string>
+    <string name="consent_body_models">Cloudflare's AI models turn it into a recipe draft. We delete what you sent as soon as the import ends and keep the draft for 7 days. Cloudflare does not use it to train AI models.</string>
+    <string name="consent_body_control">Nothing is saved to your recipes until you save the draft. You can withdraw this consent in Settings.</string>
+    <string name="consent_accept">Accept</string>
+    <string name="consent_not_now">Not now</string>
 </resources>

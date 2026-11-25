@@ -131,6 +131,9 @@ import recipes.shared.generated.resources.edit_section_steps
 import recipes.shared.generated.resources.edit_section_tags
 import recipes.shared.generated.resources.edit_title_edit
 import recipes.shared.generated.resources.edit_title_new
+import recipes.shared.generated.resources.review_discard_body
+import recipes.shared.generated.resources.review_discard_title
+import recipes.shared.generated.resources.review_title
 
 @Composable
 internal fun FieldError.text(): String = when (this) {
@@ -156,7 +159,9 @@ private fun rejectedText(code: String): String = when (code) {
 
 /**
  * @param onSaved called with the recipe id after a successful save.
- * @param onClose leaves the editor without saving; guarded by a discard dialog when the form has changes.
+ * @param onClose leaves the editor without saving; guarded by a discard dialog when the form has changes,
+ *   and always when reviewing an import, whose draft is lost on close.
+ * @param header shown above the form, below the status line; the import review puts its report action here.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -164,6 +169,7 @@ fun RecipeEditScreen(
     vm: RecipeEditViewModel,
     onSaved: (String) -> Unit,
     onClose: () -> Unit,
+    header: (@Composable () -> Unit)? = null,
 ) {
     val form = vm.form
     val status = vm.status
@@ -181,10 +187,11 @@ fun RecipeEditScreen(
         }
     }
 
-    val requestClose = { if (form.isDirty && !saved) confirmDiscard = true else onClose() }
+    val guarded = (form.isDirty || vm.isReview) && !saved
+    val requestClose = { if (guarded) confirmDiscard = true else onClose() }
     NavigationBackHandler(
         state = rememberNavigationEventState(NavigationEventInfo.None),
-        isBackEnabled = form.isDirty && !saved,
+        isBackEnabled = guarded,
         onBackCompleted = { confirmDiscard = true },
     )
     val pictures = rememberPictureActions(Limits.IMAGES - form.images.size, onPicked = {
@@ -192,12 +199,17 @@ fun RecipeEditScreen(
         vm.addImage(it)
     }, onFailed = { pictureFailed = true })
     val errors = vm.errors
+    val titleRes = when {
+        vm.isReview -> Res.string.review_title
+        vm.isNew -> Res.string.edit_title_new
+        else -> Res.string.edit_title_edit
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(if (vm.isNew) Res.string.edit_title_new else Res.string.edit_title_edit)) },
+                title = { Text(stringResource(titleRes)) },
                 navigationIcon = {
                     IconButton(onClick = requestClose) { Icon(RecipeIcons.Close, stringResource(Res.string.action_close)) }
                 },
@@ -237,6 +249,7 @@ fun RecipeEditScreen(
                     }
                 }
             }
+            if (header != null) item(key = "header") { header() }
             item(key = "pictures") { PicturesSection(form, pictures, vm::imagePath) }
             item(key = "basics") {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -318,8 +331,8 @@ fun RecipeEditScreen(
 
     if (confirmDiscard) {
         ConfirmDialog(
-            title = stringResource(Res.string.edit_discard_title),
-            body = stringResource(Res.string.edit_discard_body),
+            title = stringResource(if (vm.isReview) Res.string.review_discard_title else Res.string.edit_discard_title),
+            body = stringResource(if (vm.isReview) Res.string.review_discard_body else Res.string.edit_discard_body),
             confirm = stringResource(Res.string.edit_discard_confirm),
             dismiss = stringResource(Res.string.edit_discard_keep),
             destructive = true,

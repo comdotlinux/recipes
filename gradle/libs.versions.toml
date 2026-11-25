@@ -21,6 +21,7 @@ coil = "3.6.3"
 filekit = "0.17.1"
 androidx-credentials = "1.6.0"
 googleid = "1.2.1"
+mlkit-text-recognition = "16.0.1"
 # Compose 1.12.1 (inside Compose Multiplatform 1.12.2) requires compileSdk 37 in its AAR metadata.
 android-compileSdk = "37"
 android-targetSdk = "36"
@@ -56,6 +57,8 @@ filekit-dialogs-compose = { module = "io.github.vinceglb:filekit-dialogs-compose
 androidx-credentials = { module = "androidx.credentials:credentials", version.ref = "androidx-credentials" }
 androidx-credentials-play-services-auth = { module = "androidx.credentials:credentials-play-services-auth", version.ref = "androidx-credentials" }
 googleid = { module = "com.google.android.libraries.identity.googleid:googleid", version.ref = "googleid" }
+# Bundled model (Latin script); the unbundled variant would download the model through Play Services.
+mlkit-text-recognition = { module = "com.google.mlkit:text-recognition", version.ref = "mlkit-text-recognition" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

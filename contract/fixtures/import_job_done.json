@@ -1,0 +1,23 @@
+{
+  "id": "4c0e9a1b-7d2f-4e3a-9b8c-1f2e3d4c5b6a",
+  "kind": "url",
+  "status": "done",
+  "createdAt": "2026-11-24T18:00:00Z",
+  "draft": {
+    "id": "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a",
+    "title": "Kartoffelsalat",
+    "description": "",
+    "servings": 4,
+    "prepMinutes": 20,
+    "cookMinutes": 25,
+    "ingredients": [
+      { "quantity": "1", "unit": "kg", "item": "Kartoffeln", "group": null }
+    ],
+    "steps": ["Kartoffeln kochen."],
+    "tags": [],
+    "sourceUrl": "https://example.org/kartoffelsalat",
+    "sourceType": "url",
+    "language": "de",
+    "imageIds": []
+  }
+}

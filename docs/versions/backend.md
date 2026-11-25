@@ -30,3 +30,18 @@ Notable transitive versions pinned by `bun.lock`: `workerd` 1.20261123.1, `minif
 |-----------|---------|--------|
 | bun | 1.4.5 | container image `oven/bun:1.4.5-slim` (published 2026-11-19, https://hub.docker.com/r/oven/bun/tags) used for spike S1 |
 | Workers compatibility date | 2026-11-23 | newest date supported by the bundled workerd 1.20261123.1 |
+
+## Workers AI models and AI Gateway (M2, checked 2026-11-24)
+
+| Use | Model id | Source | What the source states |
+|-----|----------|--------|------------------------|
+| Structuring, primary | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | https://developers.cloudflare.com/workers-ai/features/json-mode/ | on the JSON Mode list (`response_format` with `json_schema`) |
+| Structuring, fallback | `@cf/meta/llama-3.1-8b-instruct` | same page | on the JSON Mode list |
+| Vision, primary | `@cf/meta/llama-4-scout-17b-16e-instruct` | https://developers.cloudflare.com/workers-ai/models/llama-4-scout-17b-16e-instruct/ | "text and image understanding", 131,000-token context; not on the JSON Mode list |
+| Vision, fallback | `@cf/mistralai/mistral-small-3.1-24b-instruct` | https://developers.cloudflare.com/workers-ai/models/mistral-small-3.1-24b-instruct/ | "vision understanding", 128,000-token context; not on the JSON Mode list |
+
+- Gateway call through the binding: `env.AI.run(model, inputs, { gateway: { id }, extraHeaders })` (https://developers.cloudflare.com/ai-gateway/integrations/worker-binding-methods/, page dated 2026-11-05; `extraHeaders` and `gateway.collectLog` are in the generated runtime types).
+- Payload logging off per request: header `cf-aig-collect-log-payload: false` (https://developers.cloudflare.com/ai-gateway/observability/logging/).
+- Cache off per request: header `cf-aig-skip-cache: true` (https://developers.cloudflare.com/ai-gateway/features/caching/, page dated 2026-09-30, checked 2026-11-24) and the binding option `gateway.skipCache: true` (worker-binding-methods page). The caching page says gateway caching is off by default and that skipping bypasses a cached copy; it does not say a skipped request is never stored, so the gateway's cache setting must stay off in `infra/provision.ts` (UNVERIFIED until the owner logs in).
+- All model ids use the `@cf/` prefix, so the Workers AI data-usage page (https://developers.cloudflare.com/workers-ai/platform/data-usage/) applies; a test enforces the prefix.
+- UNVERIFIED, needs an account (spikes S2, S3, S9): the image message shape and size limits of the vision models, how a Guardrails block surfaces through the binding (`GUARDRAIL_BLOCK` in `src/ai/gateway.ts`), Guardrails with image input, and the malware-blocking resolver's answer for a blocked host (`MALWARE_RESOLVER_URL` in `src/ai/fetch-url.ts`).

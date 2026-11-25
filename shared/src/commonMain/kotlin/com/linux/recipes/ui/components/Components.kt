@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -151,6 +152,9 @@ fun EmptyPrompt(
     modifier: Modifier = Modifier,
     title: String? = null,
     withMark: Boolean = false,
+    secondaryLabel: String? = null,
+    secondaryIcon: ImageVector? = null,
+    onSecondary: () -> Unit = {},
 ) {
     Column(modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         if (withMark) {
@@ -172,6 +176,16 @@ fun EmptyPrompt(
             Icon(actionIcon, contentDescription = null, modifier = Modifier.size(20.dp))
             Spacer(Modifier.size(8.dp))
             Text(actionLabel)
+        }
+        if (secondaryLabel != null) {
+            Spacer(Modifier.size(12.dp))
+            FilledTonalButton(onClick = onSecondary, modifier = Modifier.heightIn(min = 56.dp), shape = MaterialTheme.shapes.medium) {
+                if (secondaryIcon != null) {
+                    Icon(secondaryIcon, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.size(8.dp))
+                }
+                Text(secondaryLabel)
+            }
         }
     }
 }

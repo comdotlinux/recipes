@@ -13,6 +13,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import com.linux.recipes.data.ConsentRepository
+import com.linux.recipes.data.ImportOutcome
+import com.linux.recipes.data.ImportRepository
 import com.linux.recipes.data.RecipeRepository
 import com.linux.recipes.data.SessionRepository
 import com.linux.recipes.data.SessionState
@@ -20,6 +23,9 @@ import com.linux.recipes.ui.detail.RecipeDetailScreen
 import com.linux.recipes.ui.detail.RecipeDetailViewModel
 import com.linux.recipes.ui.edit.RecipeEditScreen
 import com.linux.recipes.ui.edit.RecipeEditViewModel
+import com.linux.recipes.ui.imports.ImportViewModel
+import com.linux.recipes.ui.imports.ReviewImportScreen
+import com.linux.recipes.ui.imports.ReviewLocalScreen
 import com.linux.recipes.ui.list.RecipeListScreen
 import com.linux.recipes.ui.list.RecipeListViewModel
 import com.linux.recipes.ui.settings.SettingsScreen
@@ -35,9 +41,13 @@ import kotlinx.serialization.Serializable
 /** `id == null` creates a new recipe. */
 @Serializable data class EditRoute(val id: String? = null)
 @Serializable data object SettingsRoute
+/** The editor on the draft of the finished import [jobId]; saving creates a new recipe. */
+@Serializable data class ReviewImportRoute(val jobId: String)
+/** The editor on the draft of a photo read on the phone, held by the list's [ImportViewModel]; saving creates a new recipe. */
+@Serializable data object ReviewLocalRoute
 
 /**
- * The whole app below the theme. Signed out, only the sign-in screen exists; signing in or out
+ * The whole app below the theme. [imports] and [consent] are the AI import; without both, no import entry is shown. Signed out, only the sign-in screen exists; signing in or out
  * replaces the back stack, so no screen of the other state stays reachable with back.
  */
 @Composable
@@ -45,8 +55,11 @@ fun RecipesNavHost(
     sessionRepository: SessionRepository,
     recipeRepository: RecipeRepository,
     turnstile: TurnstileChallenge? = null,
+    imports: ImportRepository? = null,
+    consent: ConsentRepository? = null,
     nav: NavHostController = rememberNavController(),
 ) {
+    val ai = if (imports != null && consent != null) imports to consent else null
     val session by sessionRepository.state.collectAsState()
     val signedIn = session is SessionState.SignedIn
     LaunchedEffect(signedIn) {
@@ -68,6 +81,62 @@ fun RecipesNavHost(
                 onOpen = { nav.navigate(DetailRoute(it)) },
                 onAdd = { nav.navigate(EditRoute()) },
                 onSettings = { nav.navigate(SettingsRoute) },
+                imports = ai?.let { (i, c) -> viewModel { ImportViewModel(i, c) } },
+                onReview = { nav.navigate(ReviewImportRoute(it)) },
+                onReviewLocal = { nav.navigate(ReviewLocalRoute) },
+            )
+        }
+        composable<ReviewLocalRoute> { entry ->
+            // The list's view model holds the draft and runs "Tidy up with AI", so its status card shows on the list.
+            val list = remember(entry) { nav.getBackStackEntry<ListRoute>() }
+            val importVm = ai?.let { (i, c) -> viewModel(list) { ImportViewModel(i, c) } }
+            val draft = remember { importVm?.localDraft?.draft }
+            if (importVm == null || draft == null) {
+                LaunchedEffect(Unit) { nav.popBackStack() }
+                return@composable
+            }
+            val language = Locale.current.toLanguageTag()
+            ReviewLocalScreen(
+                vm = viewModel { RecipeEditViewModel(recipeRepository, null, language, draft) },
+                onTidyUp = {
+                    importVm.tidyUp()
+                    nav.popBackStack()
+                },
+                onSaved = { savedId ->
+                    importVm.closeLocalDraft()
+                    nav.navigate(DetailRoute(savedId)) { popUpTo<ReviewLocalRoute> { inclusive = true } }
+                },
+                onClose = {
+                    importVm.closeLocalDraft()
+                    nav.popBackStack()
+                },
+            )
+        }
+        composable<ReviewImportRoute> { entry ->
+            val jobId = entry.toRoute<ReviewImportRoute>().jobId
+            val repository = ai?.first
+            // Read once: acknowledging after the save clears activeJob, the open editor keeps its draft.
+            val draft = remember(jobId) {
+                (repository?.activeJob?.value?.takeIf { it.jobId == jobId }?.outcome as? ImportOutcome.Done)?.draft
+            }
+            if (repository == null || draft == null) {
+                // The job was acknowledged elsewhere or has expired: nothing to review.
+                LaunchedEffect(jobId) { nav.popBackStack() }
+                return@composable
+            }
+            val language = Locale.current.toLanguageTag()
+            ReviewImportScreen(
+                vm = viewModel { RecipeEditViewModel(recipeRepository, null, language, draft) },
+                imports = repository,
+                jobId = jobId,
+                onSaved = { savedId ->
+                    repository.acknowledge(jobId)
+                    nav.navigate(DetailRoute(savedId)) { popUpTo<ReviewImportRoute> { inclusive = true } }
+                },
+                onClose = {
+                    repository.acknowledge(jobId)
+                    nav.popBackStack()
+                },
             )
         }
         composable<DetailRoute> { entry ->
@@ -94,7 +163,7 @@ fun RecipesNavHost(
             )
         }
         composable<SettingsRoute> {
-            SettingsScreen(viewModel { SettingsViewModel(sessionRepository) }, onBack = { nav.popBackStack() })
+            SettingsScreen(viewModel { SettingsViewModel(sessionRepository, consent) }, onBack = { nav.popBackStack() })
         }
     }
 }

@@ -3,7 +3,8 @@
  * - after every insert and every run the alarm is set to the earliest due_at, because setAlarm replaces the pending one;
  * - the handler never throws; each task runs in its own try/catch, and a failure reschedules only that task with backoff.
  */
-export type TaskHandler = (payload: string | null, now: number) => void | Promise<void>;
+/** `attempts` = how many earlier runs of this task failed (0 on the first run). */
+export type TaskHandler = (payload: string | null, now: number, attempts: number) => void | Promise<void>;
 
 type TaskRow = { id: string; kind: string; due_at: number; attempts: number; payload: string | null };
 
@@ -39,17 +40,22 @@ export async function runDueTasks(storage: DurableObjectStorage, handlers: Recor
 	const due = storage.sql.exec<TaskRow>("SELECT id, kind, due_at, attempts, payload FROM tasks WHERE due_at <= ? ORDER BY due_at", now).toArray();
 	const failed: string[] = [];
 	for (const task of due) {
+		// Count the try before running it, and make that durable: a handler killed by the runtime (CPU limit, eviction)
+		// never reaches the catch below, and must still use up a try so a job cannot stay "running" forever.
+		const attempts = task.attempts + 1;
+		storage.sql.exec("UPDATE tasks SET attempts = ? WHERE id = ?", attempts, task.id);
+		await storage.sync();
 		try {
 			const handler = handlers[task.kind];
 			if (!handler) throw new Error(`no handler for task kind ${task.kind}`);
-			await handler(task.payload, now);
+			await handler(task.payload, now, task.attempts);
 			// A handler may have rescheduled its own task to a later time; only remove it if it is still the run that was due.
 			storage.sql.exec("DELETE FROM tasks WHERE id = ? AND due_at = ?", task.id, task.due_at);
 		} catch (e) {
 			failed.push(task.id);
-			const attempts = task.attempts + 1;
-			storage.sql.exec("UPDATE tasks SET attempts = ?, due_at = ? WHERE id = ?", attempts, now + backoff(attempts), task.id);
-			console.error(`task ${task.id} (${task.kind}) failed, attempt ${attempts}: ${String(e)}`);
+			storage.sql.exec("UPDATE tasks SET due_at = ? WHERE id = ?", now + backoff(attempts), task.id);
+			// Name only: an error from a model call can carry user text in its message.
+			console.error(`task ${task.id} (${task.kind}) failed, attempt ${attempts}: ${e instanceof Error ? e.name : "non-error value"}`);
 		}
 	}
 	await armAlarm(storage);

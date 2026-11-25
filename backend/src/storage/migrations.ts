@@ -24,6 +24,19 @@ export const MIGRATIONS: Migration[] = [
 		sql.exec("CREATE INDEX images_recipe ON images (recipe_id)");
 		sql.exec("CREATE TABLE daily_counters (day TEXT NOT NULL, key TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (day, key))");
 	},
+	// v3 (M2): import jobs, monthly usage, daily counted attempts, reports
+	(sql) => {
+		sql.exec(
+			`CREATE TABLE jobs (job_key TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, input TEXT, input_blob BLOB,
+			 created_at INTEGER NOT NULL, ended_at INTEGER, result_json TEXT, charge TEXT, period TEXT)`,
+		);
+		sql.exec("CREATE TABLE usage (period TEXT PRIMARY KEY, count INTEGER NOT NULL)");
+		sql.exec("CREATE TABLE attempts (day TEXT PRIMARY KEY, count INTEGER NOT NULL)");
+		// One report per job and kind (F2): reports cannot pile up.
+		sql.exec(
+			"CREATE TABLE reports (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, kind TEXT NOT NULL, job_key TEXT, reason TEXT NOT NULL, note TEXT NOT NULL, UNIQUE (job_key, kind))",
+		);
+	},
 ];
 
 // GLOB, not LIKE: "_" is a wildcard in LIKE. _cf_* tables are internal to the runtime.

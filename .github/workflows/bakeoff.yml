@@ -1,0 +1,45 @@
+name: bakeoff
+
+# Manual only: runs every model in backend/src/ai/models.ts over backend/test/golden/ through the staging AI Gateway
+# and uploads docs/model-bakeoff.md. Costs Workers AI usage, so it never runs on push or pull request.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bakeoff
+  cancel-in-progress: false
+
+env:
+  MISE_VERSION: "2026.11.10"
+
+jobs:
+  bakeoff:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    environment: staging
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
+        with:
+          version: ${{ env.MISE_VERSION }}
+      - name: Install
+        working-directory: backend
+        run: bun install --frozen-lockfile
+      - name: Run the bake-off
+        working-directory: backend
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GATEWAY_ID: recipes
+        run: bun run bakeoff
+      - name: Upload the report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: model-bakeoff
+          path: docs/model-bakeoff.md
+          if-no-files-found: error

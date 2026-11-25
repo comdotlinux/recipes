@@ -1,6 +1,16 @@
 package com.linux.recipes.ui
 
+import com.linux.recipes.data.ConsentRepository
+import com.linux.recipes.data.ConsentState
+import com.linux.recipes.data.ImportJobState
+import com.linux.recipes.data.ImportOutcome
+import com.linux.recipes.data.ImportRepository
+import com.linux.recipes.data.ImportSource
+import com.linux.recipes.data.ImportStart
 import com.linux.recipes.data.Ingredient
+import com.linux.recipes.data.LocalRead
+import com.linux.recipes.data.Quota
+import com.linux.recipes.data.ReportReason
 import com.linux.recipes.data.NewImage
 import com.linux.recipes.data.Recipe
 import com.linux.recipes.data.RecipeInput
@@ -12,6 +22,112 @@ import com.linux.recipes.data.SignInResult
 import com.linux.recipes.platform.TurnstileGate
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
+
+/**
+ * Answers [start] with [startResult]; [ImportStart.Started] and [ImportStart.AlreadyRunning] open a job
+ * in [activeJob], as the real repository does. Tests finish the job by setting [activeJob] themselves.
+ */
+class FakeImportRepository(job: ImportJobState? = null) : ImportRepository {
+    override val activeJob = MutableStateFlow(job)
+    var startResult: ImportStart = ImportStart.Started("")
+    var quotaResult: Quota? = Quota(freeImportUsed = false, monthUsed = 0, monthLimit = 30, entitled = false)
+    var reportResult = true
+    val starts = mutableListOf<Pair<ImportSource, String>>()
+    val acknowledged = mutableListOf<String>()
+    val reports = mutableListOf<Triple<String, ReportReason, String>>()
+    var resumeCalls = 0
+    var readResult: LocalRead = LocalRead.Draft(localDraft, LOCAL_TEXT)
+    val reads = mutableListOf<ByteArray>()
+    var quotaCalls = 0
+
+    override suspend fun readOnDevice(jpeg: ByteArray): LocalRead {
+        reads += jpeg
+        return readResult
+    }
+
+    override suspend fun start(source: ImportSource, jobId: String): ImportStart {
+        starts += source to jobId
+        val result = startResult
+        if (result is ImportStart.Started) activeJob.value = ImportJobState(jobId, "url", outcome = null, offline = false)
+        if (result == ImportStart.AlreadyRunning) activeJob.value = ImportJobState("running-job", "url", outcome = null, offline = false)
+        return result
+    }
+
+    override suspend fun resume() {
+        resumeCalls++
+    }
+
+    override fun acknowledge(jobId: String) {
+        acknowledged += jobId
+        if (activeJob.value?.jobId == jobId) activeJob.value = null
+    }
+
+    override suspend fun quota(): Quota? = quotaResult.also { quotaCalls++ }
+
+    override suspend fun report(jobId: String, reason: ReportReason, note: String): Boolean {
+        reports += Triple(jobId, reason, note)
+        return reportResult
+    }
+
+    fun finish(outcome: ImportOutcome) {
+        activeJob.value = activeJob.value!!.copy(outcome = outcome)
+    }
+}
+
+class FakeConsentRepository(given: Boolean = true) : ConsentRepository {
+    override val currentVersion = 1
+    override val state = MutableStateFlow<ConsentState>(if (given) ConsentState.Given(1) else ConsentState.NotGiven)
+    var online = true
+    var acceptCalls = 0
+
+    var refreshCalls = 0
+
+    /** A fake that starts as [ConsentState.Unknown] learns its state here, as the real one does from `GET /me`. */
+    var stateAfterRefresh: ConsentState? = null
+
+    override suspend fun refresh(): Boolean {
+        refreshCalls++
+        if (online) stateAfterRefresh?.let { state.value = it }
+        return online
+    }
+
+    override suspend fun accept(): Boolean {
+        acceptCalls++
+        if (online) state.value = ConsentState.Given(currentVersion)
+        return online
+    }
+
+    override suspend fun withdraw(): Boolean {
+        if (online) state.value = ConsentState.NotGiven
+        return online
+    }
+}
+
+/** What the server returns for a finished link import. */
+val importedDraft = RecipeInput(
+    id = "7d3e2c1b-0a9f-4e8d-8c7b-6a5f4e3d2c1b",
+    title = "Pasta e ceci",
+    description = "Chickpeas and small pasta in one pot.",
+    servings = 4,
+    cookMinutes = 30,
+    ingredients = listOf(Ingredient("400", "g", "chickpeas"), Ingredient("150", "g", "ditalini")),
+    steps = listOf("Soften garlic and rosemary in oil.", "Add chickpeas, stock and pasta; simmer until thick."),
+    sourceUrl = "https://example.com/pasta-e-ceci",
+    sourceType = "url",
+    language = "en",
+)
+
+/** What the phone read from a photo, and the draft the on-device parser made of it. */
+const val LOCAL_TEXT = "Pfannkuchen\n250 g Mehl\n3 Eier\nAlles zu einem Teig verrühren und ausbacken."
+
+val localDraft = RecipeInput(
+    id = "2a3b4c5d-6e7f-4a8b-9c0d-1e2f3a4b5c6d",
+    title = "Pfannkuchen",
+    ingredients = listOf(Ingredient("250", "g", "Mehl"), Ingredient("3", "", "Eier")),
+    steps = listOf("Alles zu einem Teig verrühren und ausbacken."),
+    sourceType = "photo",
+    language = "de",
+)
 
 const val USER_ID = "Qm9vay1ib3gtdGVzdC11c2VyLWlkLTAwMDAwMDAwMDA"
 

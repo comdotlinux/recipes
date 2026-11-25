@@ -54,6 +54,16 @@ import com.linux.recipes.ui.components.NoteBanner
 import com.linux.recipes.ui.components.PageGutter
 import com.linux.recipes.ui.components.RecipeIcons
 import com.linux.recipes.ui.components.RecipeThumb
+import com.linux.recipes.ui.edit.rememberPictureActions
+import com.linux.recipes.ui.imports.AiNotice
+import com.linux.recipes.ui.imports.ImportPaywall
+import com.linux.recipes.ui.imports.ImportSheet
+import com.linux.recipes.ui.imports.ImportStatus
+import com.linux.recipes.ui.imports.ImportViewModel
+import com.linux.recipes.ui.imports.UnreadableSheet
+import androidx.compose.runtime.LaunchedEffect
+import recipes.shared.generated.resources.import_action
+import recipes.shared.generated.resources.import_empty_action
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.pluralStringResource
 import org.jetbrains.compose.resources.stringResource
@@ -106,6 +116,11 @@ internal fun List<Recipe>.search(query: String): List<Recipe> {
     return filter { r -> r.title.contains(q, ignoreCase = true) || r.tags.any { it.contains(q, ignoreCase = true) } }
 }
 
+/**
+ * @param imports the AI import flow; null hides every import entry point.
+ * @param onReview opens the review editor for an import job that has a draft.
+ * @param onReviewLocal opens the review editor for the draft of a photo read on the phone.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RecipeListScreen(
@@ -113,8 +128,40 @@ fun RecipeListScreen(
     onOpen: (String) -> Unit,
     onAdd: () -> Unit,
     onSettings: () -> Unit,
+    imports: ImportViewModel? = null,
+    onReview: (String) -> Unit = {},
+    onReviewLocal: () -> Unit = {},
 ) {
     val all by vm.recipes.collectAsState()
+    val job = imports?.activeJob?.collectAsState()?.value
+    if (imports != null) {
+        LaunchedEffect(imports) { imports.followOpenJob() }
+        val pictures = rememberPictureActions(1, onPicked = imports::importPhoto, onFailed = imports::pictureFailed)
+        if (imports.sheetOpen) ImportSheet(imports, pictures)
+        val local = imports.localDraft
+        // Cleared before the editor closes, so returning to the list does not open it again.
+        LaunchedEffect(local) { if (local != null) onReviewLocal() }
+        if (imports.unreadable != null) {
+            UnreadableSheet(
+                onReadWithAi = imports::readWithAi,
+                onTypeIn = {
+                    imports.closeUnreadable()
+                    onAdd()
+                },
+                onClose = imports::closeUnreadable,
+            )
+        }
+        if (imports.consentFor != null) AiNotice(onAccept = imports::acceptConsent, onNotNow = imports::declineConsent)
+        if (imports.paywallOpen) {
+            ImportPaywall(
+                onTypeIn = {
+                    imports.closePaywall()
+                    onAdd()
+                },
+                onClose = imports::closePaywall,
+            )
+        }
+    }
     val shown = all.search(vm.query)
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     Scaffold(
@@ -137,17 +184,38 @@ fun RecipeListScreen(
         },
         floatingActionButton = {
             if (all.isNotEmpty()) {
-                // The plain-content overload: the icon+text overload wraps the label in an expand
-                // animation whose text never reaches the Android accessibility tree (TalkBack, UI Automator).
-                ExtendedFloatingActionButton(
-                    onClick = onAdd,
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    shape = MaterialTheme.shapes.large,
-                ) {
-                    Icon(RecipeIcons.Add, contentDescription = null)
-                    Spacer(Modifier.size(12.dp))
-                    Text(stringResource(Res.string.list_add))
+                val buttons: @Composable () -> Unit = {
+                    if (imports != null) {
+                        // Secondary weight: the tonal colour next to the filled primary.
+                        ExtendedFloatingActionButton(
+                            onClick = imports::openSheet,
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            shape = MaterialTheme.shapes.large,
+                        ) {
+                            Icon(RecipeIcons.Import, contentDescription = null)
+                            Spacer(Modifier.size(10.dp))
+                            Text(stringResource(Res.string.import_action))
+                        }
+                    }
+                    // The plain-content overload: the icon+text overload wraps the label in an expand
+                    // animation whose text never reaches the Android accessibility tree (TalkBack, UI Automator).
+                    ExtendedFloatingActionButton(
+                        onClick = onAdd,
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        shape = MaterialTheme.shapes.large,
+                    ) {
+                        Icon(RecipeIcons.Add, contentDescription = null)
+                        Spacer(Modifier.size(12.dp))
+                        Text(stringResource(Res.string.list_add))
+                    }
+                }
+                // At very large text two buttons side by side would run off the screen; they stack instead.
+                if (LocalDensity.current.fontScale >= 1.5f) {
+                    Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(12.dp)) { buttons() }
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) { buttons() }
                 }
             }
         },
@@ -163,6 +231,15 @@ fun RecipeListScreen(
                 contentPadding = PaddingValues(start = PageGutter, end = PageGutter, top = 4.dp, bottom = 112.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                // Only when there is something to show, so an empty item adds no gap.
+                if (imports != null && (imports.problem != null || imports.starting || imports.reading || job != null)) {
+                    item(key = "import") {
+                        ImportStatus(imports, job, onReview = onReview, onTypeIn = {
+                            imports.dismissProblem()
+                            onAdd()
+                        })
+                    }
+                }
                 if (all.isNotEmpty()) {
                     item(key = "search") { SearchField(vm.query) { vm.query = it } }
                 }
@@ -193,6 +270,9 @@ fun RecipeListScreen(
                             actionIcon = RecipeIcons.Add,
                             onAction = onAdd,
                             withMark = true,
+                            secondaryLabel = imports?.let { stringResource(Res.string.import_empty_action) },
+                            secondaryIcon = RecipeIcons.Import,
+                            onSecondary = { imports?.openSheet() },
                             modifier = Modifier.padding(top = 56.dp),
                         )
                     }

@@ -38,24 +38,33 @@ class RecordingUriHandler : UriHandler {
 }
 
 /**
- * [App] as the user sees it on a phone, on every platform. The Compose test window on iOS is 1024 x 768 at density 1
- * (`runComposeUiTest` defaults in compose ui-test `skikoMain/.../v2/ComposeUiTest.skiko.kt`), so a 4:3 picture fills
- * the whole height and lazy lists never compose what follows; Robolectric already runs at 360 x 640 dp (`UiTest`).
- * The picture launchers and the Turnstile web view are replaced by [testDoubles]: iOS cannot host them here.
+ * The only way common UI tests set content: [content] as on a phone, on every platform. The Compose test window on
+ * iOS is 1024 x 768 at density 1 (`runComposeUiTest` defaults in compose ui-test
+ * `skikoMain/.../v2/ComposeUiTest.skiko.kt`), so a 4:3 picture fills the whole height and lazy lists never compose
+ * what follows; Robolectric already runs at 360 x 640 dp (`UiTest`). The picture launchers and the Turnstile web view
+ * are replaced by [testDoubles]: iOS cannot host them here. Plain `setContent` belongs only in Android host tests.
  */
+@OptIn(ExperimentalTestApi::class)
+fun ComposeUiTest.setScreen(content: @Composable () -> Unit) {
+    setContent {
+        Box(Modifier.size(360.dp, 640.dp)) { testDoubles(content) }
+    }
+}
+
+/** [App] with fake repositories, through [setScreen]. */
 @OptIn(ExperimentalTestApi::class)
 fun ComposeUiTest.setApp(
     session: FakeSessionRepository,
     recipes: FakeRecipeRepository,
     uriHandler: UriHandler = RecordingUriHandler(),
     darkTheme: Boolean = false,
+    imports: FakeImportRepository? = null,
+    consent: FakeConsentRepository? = null,
     turnstile: TurnstileChallenge? = null,
 ) {
-    setContent {
-        Box(Modifier.size(360.dp, 640.dp)) {
-            CompositionLocalProvider(LocalUriHandler provides uriHandler) {
-                testDoubles { App(session, recipes, darkTheme, turnstile) }
-            }
+    setScreen {
+        CompositionLocalProvider(LocalUriHandler provides uriHandler) {
+            App(session, recipes, darkTheme, turnstile, importRepository = imports, consentRepository = consent)
         }
     }
 }

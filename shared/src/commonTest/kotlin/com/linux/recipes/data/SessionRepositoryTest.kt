@@ -142,7 +142,7 @@ class SessionRepositoryTest {
         // An earlier user's data survived (for example a failed wipe), with no session.
         RecipeCache(Path(filesDir, AppGraph.CACHE_DIR)).apply {
             writeRecipes(listOf(recipe(ID_B, 50, imageIds = listOf(IMG_2))))
-            writeSettings(RecipeCache.Settings(cursor = 50))
+            updateSettings { it.copy(cursor = 50) }
             writeImage(IMG_2, byteArrayOf(2))
         }
         val graph = AppGraph(filesDir = filesDir.toString(), secureStore = secure, authProvider = auth, httpClient = server.client, baseUrl = BASE)

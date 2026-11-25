@@ -1,0 +1,8 @@
+{
+  "expected": "done",
+  "title": "Simple Pancakes",
+  "ingredients": 7,
+  "steps": 3,
+  "language": "en",
+  "layout": "sans"
+}
