@@ -369,7 +369,7 @@ Both `.well-known` files are JSON (`application/json`), without redirects, as th
 | Route | Request | Success | Errors |
 |-------|---------|---------|--------|
 | `DELETE /account` | none | 202 `{ "state": "deleting" }` | 401 |
-| `POST /account/delete-web` (no session; the web page) | `WebDeletionRequest` (fixture `account_delete_web_request.json`) | 202 `{ "state": "deleting" }`, also when a deletion is already running | 400 `invalid_body`; 401 `invalid_turnstile`, `invalid_nonce`, `invalid_token`; 404 `no_account` (no account for this sign-in; nothing is created); 411; 429; 503 `provider_unavailable` |
+| `POST /account/delete-web` (no session; the web page; 404 while the page is not configured; only id tokens issued to the web client ids are accepted, an app token answers 401 `invalid_token`) | `WebDeletionRequest` (fixture `account_delete_web_request.json`) | 202 `{ "state": "deleting" }`, also when a deletion is already running | 400 `invalid_body`; 401 `invalid_turnstile`, `invalid_nonce`, `invalid_token`; 404 `no_account` (no account for this sign-in; nothing is created); 411; 429; 503 `provider_unavailable` |
 
 ```jsonc
 // WebDeletionRequest: the SessionRequest without ageConfirmed; provider "apple" or "google" only
@@ -378,7 +378,8 @@ Both `.well-known` files are JSON (`application/json`), without redirects, as th
 
 - From the moment the answer is 202, every call with any of the user's sessions answers 401, and `POST /session` for the same provider account answers 409 `account_deleting` until the erasure is done. Share links of the account answer 410, later 404.
 - The server then, retrying each step until it is done: deletes the RevenueCat customer, revokes the Sign in with Apple token (when the account signed in with Apple and sent `appleAuthCode`), and erases everything. The store subscription is not cancelled by this: before calling `DELETE /account` the app shows that the subscription keeps billing and links to the store's subscription page. After 202 the app wipes its cache, pictures and token and returns to sign-in.
-- Signing in again afterwards creates a fresh, empty account. If the free import had been used, it stays used (the server keeps only that fact, for 12 months).
+- Signing in again afterwards creates a fresh, empty account. If the free import had been used, it stays used; a suspension stays in force with its reason; this month's AI units stay counted (the server keeps only these facts, for 12 months).
+- The RevenueCat and Apple steps are retried for at most 7 days; after that the erasure of the user's data runs anyway.
 - Sign in with Apple: the iOS app sends `appleAuthCode` in `POST /session` (already in `SessionRequest`); the server exchanges it once for the token that deletion revokes. Without it nothing can be revoked at Apple.
 - The web page `GET /account/delete` (Worker-rendered) offers the providers whose web client ids are configured; it answers 404 while none is.
 

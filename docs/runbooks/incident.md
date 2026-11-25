@@ -7,6 +7,7 @@ For a security incident or a personal-data breach (GDPR Art. 33 and 34). The own
 - Account takeover suspected (Cloudflare, GitHub, Apple, Google, RevenueCat): change the password, revoke all sessions and API tokens of that account, check its two-factor settings, read its audit log (Cloudflare: Manage Account, Audit Log; GitHub: Settings, Security log).
 - Leaked secret: rotate it now (`key-rotation.md`). For `SERVER_KEY` rotate without keeping the old key as previous.
 - Abuse through the service: suspend the accounts involved on the admin page (`recipe-admin.munich-tech.de`, reason code); revoke reported links by report; lower the AI Gateway rate limit in the dashboard if cost is the problem.
+- Audit trail (accepted limit): the admin audit rows live in the user's object and are erased with the account. A suspension survives deletion as its reason code in the tombstone (12 months), so a suspended user who deletes and returns is still suspended; for anything longer, note the Support ID and reason in the private incident log.
 - Bad deploy: `wrangler rollback --env production` to the last good version.
 
 ## 2. Assess (within 24 hours)

@@ -34,7 +34,7 @@ forbids restoring an erased object).
 | `reports` | the user's own reports: kind, job or share id, reason, free-text note | content moderation (Google Play AI-content policy) | 90 days (`REPORT_DAYS`, `user-do.ts`) |
 | `shares` | share id, recipe id, creation and expiry, revoked flag | sharing by link | 30 days (`SHARE_TTL_MS`, `share.ts`) |
 | `share_accepts` | share id and SHA-256 of each recipient's user id | at most 10 recipients | with the share |
-| `audit` | time, operator email (Cloudflare Access identity), action, reason code | admin actions on this account | until erasure |
+| `audit` | time, operator email (Cloudflare Access identity), action, reason code | admin actions on this account | until erasure (accepted: the audit goes with the account; a suspension itself survives in the tombstone) |
 
 ## Meta keys
 
@@ -42,7 +42,7 @@ forbids restoring an erased object).
 |-----|---------|-----------|
 | `schema_version` | storage version | until erasure |
 | `state` | `active`, `suspended`, `deleting` or `tombstone` | kept in the tombstone |
-| `suspension_reason` | reason code | while suspended |
+| `suspension_reason` | reason code | while suspended; kept in the tombstone, so deleting and returning does not lift a suspension |
 | `metrics_id` | random UUID used as the metrics index | until erasure; a returning account gets a new one |
 | `created_at` | account creation time | until erasure |
 | `rev`, `purged_rev`, `recipe_bytes` | sync cursor, purge horizon, stored text size | until erasure |
@@ -52,17 +52,25 @@ forbids restoring an erased object).
 | `tombstone_until` | end of the tombstone | 12 months (`TOMBSTONE_TTL_MS`) |
 | `entitlement` | subscription state from RevenueCat: active, expiry, grace end, product id | until erasure |
 | `entitlement_at`, `entitlement_tried_at`, `entitlement_failed_at`, `entitlement_client_at` | refresh times | until erasure |
-| `apple_auth_code` | Sign in with Apple authorization code and its client id, until exchanged | at most 5 minutes (`APPLE_CODE_TTL_MS`, `user-do.ts`) |
-| `apple_refresh_token` | Apple refresh token and client id, kept only to revoke it at deletion | until erasure (revoked first) |
+| `apple_auth_codes` | Sign in with Apple authorization codes, one per client id (app bundle id, web Services ID), until exchanged | at most 5 minutes (`APPLE_CODE_TTL_MS`, `user-do.ts`) |
+| `apple_refresh_tokens` | Apple refresh tokens, one per client id, kept only to revoke each at deletion | until erasure (each revoked first) |
+| `month_usage` | only in a tombstone: this month's AI unit count `{ period, count }`, restored at the next sign-in | 12 months with the tombstone; used only within its month |
 | `deletion_started_at`, `deletion_done_revenuecat`, `deletion_done_apple` | deletion progress (key pattern `deletion_done_<step>`) | until erasure |
 | `local_entitlement` | local development switch only (`src/testing/local-billing.ts`, never in production) | local only |
 
 ## Tombstone
 
-After erasure, only when the free import was used or a refund was counted: `state`, `tombstone_until`,
-`free_import_used_at`, `free_import_refunds` (`TOMBSTONE_KEYS`, `user-do.ts`) for 12 months, so the same provider
-account gets no second free import. Nothing about recipes, pictures, sessions, subscription or provider identity.
-Otherwise the object is emptied completely (`deleteAll()`).
+The tombstone is pseudonymous personal data: it lives in the object named by the user id, which is derived from the
+provider's subject (HMAC with `USER_ID_PEPPER`), so the same Apple or Google account reaches it again. It holds only
+`state`, `tombstone_until`, and where they apply `free_import_used_at`, `free_import_refunds`, `suspension_reason` and
+`month_usage` (`TOMBSTONE_KEYS`, `user-do.ts`), for 12 months (`TOMBSTONE_TTL_MS`). Purpose: preventing repeated free
+imports, escaping a suspension and resetting the monthly AI quota by deleting and signing in again. It is written only
+when one of these facts exists; otherwise the object is emptied completely (`deleteAll()`). Nothing about recipes,
+pictures, sessions, the subscription or the provider identity is kept. The admin audit rows are not kept (accepted: the
+operator's record of a suspension is its reason code in the tombstone).
+
+Third-party deletion steps (RevenueCat customer, Apple token revocation) are retried for at most 7 days
+(`THIRD_PARTY_DEADLINE_MS`, `user-do.ts`); after that the erasure runs anyway and a metric names the abandoned step.
 
 ## Metric events (Workers Analytics Engine)
 
@@ -82,7 +90,7 @@ carry the random `metrics_id` as index; it is destroyed at erasure, so old rows 
 | `share` | outcome code | user object |
 | `pdf` | outcome code | user object |
 | `screen` | outcome code | user object |
-| `account_deletion` | started, step_retry, erased | user object (before erasure) |
+| `account_deletion` | started, step_retry, erased (user object, before erasure); third_party_abandoned with the step name (Worker side, no index) | user object, or no index |
 | `admin_action` | suspend or unsuspend, reason code | user object |
 | `auth_failure` | reason code | Worker, no index |
 | `rate_limited` | route name | Worker, no index |
@@ -117,5 +125,6 @@ check the plan's current value when the owner logs in).
 | 30 days | sessions after last use, share links, report references, point-in-time recovery | `SESSION_TTL_MS` (`user-do.ts`), `SHARE_TTL_MS`, `REPORT_REFERENCE_TTL_MS` (`share.ts`), Cloudflare |
 | 90 days | deletion markers, daily counters, own reports | `MARKER_TTL_MS`, `COUNTER_DAYS`, `REPORT_DAYS` (`user-do.ts`) |
 | 3 months | metric events | Cloudflare Analytics Engine |
-| 12 months | tombstone after erasure | `TOMBSTONE_TTL_MS` (`user-do.ts`) |
+| 7 days | longest wait for a third-party deletion step | `THIRD_PARTY_DEADLINE_MS` (`user-do.ts`) |
+| 12 months | tombstone after erasure (pseudonymous, see "Tombstone") | `TOMBSTONE_TTL_MS` (`user-do.ts`) |
 | until the user deletes it or the account | recipes, pictures, translations, usage, audit, entitlement | erasure (plan 4.7) |

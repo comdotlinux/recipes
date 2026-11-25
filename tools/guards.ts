@@ -318,7 +318,7 @@ export function schemaTables(migrations: string): string[] {
 export function metaKeys(userDo: string, extra = ""): string[] {
   const text = userDo + extra;
   const keys = [
-    ...[...text.matchAll(/(?:setMeta|meta)\("(\w+)"/g)].map((m) => m[1]),
+    ...[...text.matchAll(/(?:setMeta|meta|appleMap|setAppleMap)(?:<[^>]*>)?\("(\w+)"/g)].map((m) => m[1]),
     ...[...text.matchAll(/key = '(\w+)'/g)].map((m) => m[1]),
     ...[...text.matchAll(/LOCAL_ENTITLEMENT_KEY = "(\w+)"/g)].map((m) => m[1]),
   ];

@@ -146,3 +146,7 @@ Read from the Cloudflare API reference (developers.cloudflare.com/api/) and the 
 | Access | GET/POST/PUT `accounts/{id}/access/apps` (`type: self_hosted`, `domain`, `session_duration`, inline `policies`); answer carries `aud`; team domain from GET `accounts/{id}/access/organizations` (`auth_domain`) | Access: Apps and Policies Write, Organizations Read | developers.cloudflare.com/api/resources/zero_trust/subresources/access/ |
 
 Not confirmed in the docs: the full id of the Free Managed Ruleset, the meaning of each Llama Guard code S1 to S14, and whether a PUT on a gateway keeps omitted fields (the script always sends the full object).
+
+## Staging preview URLs (security review M6, accepted)
+
+Staging keeps preview URLs on (plan v12) while production has them off. Preview URLs bypass the zone's WAF. Accepted on one condition: staging must never hold real user data. Use only test accounts there, never restore production data into it, and never point a released app build at the staging host.
