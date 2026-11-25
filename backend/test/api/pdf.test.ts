@@ -6,7 +6,7 @@ import { RecipeInput } from "../../src/recipes";
 import { type Session, call, inObject, interceptOutbound, signIn, uuid } from "./helpers";
 
 const PDF_BYTES = new TextEncoder().encode("%PDF-1.7 test");
-let renders: { action: string; options: BrowserRunPDFOptions }[] = [];
+let renders: { action: string; options: BrowserRunPDFOptions & { html?: string } }[] = [];
 /** Intercepts the Browser Run binding: records each call and answers with `answer`. */
 function fakeBrowser(answer: () => Response = () => new Response(PDF_BYTES, { headers: { "content-type": "application/pdf" } })) {
 	renders = [];
