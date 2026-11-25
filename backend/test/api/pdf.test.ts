@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import inputFixture from "../../../contract/fixtures/recipe_input.json";
-import { PDF_CSP, escapeHtml, pdfHtml } from "../../src/pdf";
+import { LABELS, PDF_CSP, escapeHtml, pdfHtml } from "../../src/pdf-template";
 import { RecipeInput } from "../../src/recipes";
 import { type Session, call, inObject, interceptOutbound, signIn, uuid } from "./helpers";
 
@@ -54,7 +54,8 @@ describe("PDF (AC26)", () => {
 		expect(renders).toHaveLength(1);
 		const [{ action, options }] = renders;
 		expect(action).toBe("pdf");
-		expect(options).toMatchObject({ setJavaScriptEnabled: false, cacheTTL: 0, rejectRequestPattern: ["/^(https?|wss?|ftp):/"] });
+		expect(options).toMatchObject({ setJavaScriptEnabled: false, cacheTTL: 0, allowRequestPattern: ["/^(data|about):/"] });
+		expect(options).not.toHaveProperty("rejectRequestPattern");
 		expect(options).not.toHaveProperty("url");
 		expect(options).not.toHaveProperty("addScriptTag");
 		expect(options.html).toContain(`<meta http-equiv="Content-Security-Policy" content="${PDF_CSP}">`);
@@ -101,6 +102,18 @@ describe("PDF (AC26)", () => {
 		expect((await pdf(s, id)).status).toBe(200);
 	});
 
+	it("failed renders have their own cap of 40 a day, so failures cannot use browser time without end", async () => {
+		const s = await signIn();
+		const id = await create(s);
+		fakeBrowser(() => Response.json({ success: false }, { status: 500 }));
+		for (let i = 0; i < 40; i++) expect((await pdf(s, id)).status).toBe(503);
+		const res = await pdf(s, id);
+		expect([res.status, await code(res)]).toEqual([429, "pdf_limit"]);
+		expect(renders).toHaveLength(40);
+		fakeBrowser();
+		expect((await pdf(s, id)).status).toBe(429); // also for a render that would work, until the next UTC day
+	});
+
 	it("is free: no subscription needed; uses the global pdf rate-limit key", async () => {
 		const s = await signIn();
 		const id = await create(s);
@@ -138,6 +151,19 @@ describe("pdfHtml", () => {
 	it("escapes all five HTML-significant characters", () => {
 		expect(escapeHtml(`<>&"'`)).toBe("&lt;&gt;&amp;&quot;&#39;");
 	});
+	it("the fixed texts follow the recipe's language (ten languages), English otherwise", () => {
+		const base = RecipeInput.parse({ ...inputFixture, prepMinutes: 10 });
+		const de = pdfHtml({ ...base, language: "de" }, []);
+		expect(de).toContain("<h2>Zutaten</h2>");
+		expect(de).toContain("<h2>Zubereitung</h2>");
+		expect(de).toContain('<p class="meta">4 Portionen · Vorbereitung 10 Min. · Kochen 25 Min.</p>');
+		const tr = pdfHtml({ ...base, language: "tr-TR" }, []);
+		expect(tr).toContain("<h2>Malzemeler</h2>");
+		expect(tr).toContain("pişirme 25 dk");
+		expect(pdfHtml({ ...base, language: "ja" }, [])).toContain("<h2>Ingredients</h2>");
+		expect(Object.keys(LABELS).sort()).toEqual(["de", "en", "es", "fr", "it", "nl", "pl", "pt", "sv", "tr"]);
+	});
+
 	it("shows servings and times, group headings once per group, and leaves out empty sections", () => {
 		const recipe = RecipeInput.parse({
 			...inputFixture,
@@ -152,7 +178,7 @@ describe("pdfHtml", () => {
 			tags: [],
 		});
 		const html = pdfHtml(recipe, []);
-		expect(html).toContain('<p class="meta">4 servings · cook 25 min</p>');
+		expect(html).toContain('<p class="meta">4 Portionen · Kochen 25 Min.</p>');
 		expect(html.match(/<h3>/g)).toHaveLength(2);
 		expect(html).toContain("<li>Salz</li>");
 		expect(html).not.toContain("<h2>Steps</h2>");

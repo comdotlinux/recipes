@@ -3,9 +3,10 @@ import { type Result, error } from "./http";
 import { FREE_CAP_BYTES, SUBSCRIBER_CAP_BYTES } from "./images";
 import { systemEvent, userEvent } from "./metrics";
 import { MAX_IMAGES_PER_RECIPE, MAX_RECIPES, RecipeInput, type TranslationView, isoTime, stripControls, toRecipe } from "./recipes";
-import { SHARES_PER_DAY, SHARE_RECIPIENT_LIMIT, SHARE_TTL_MS, derivedId, newShareId, newShareToken, reportReference } from "./share";
+import { SCREENS_PER_DAY, SHARES_PER_DAY, SHARE_RECIPIENT_LIMIT, SHARE_TTL_MS, derivedId, newShareId, newShareToken, reportReference } from "./share";
 import { sha256Hex } from "./auth/encoding";
-import { PDF_PER_DAY, pdfHtml, renderPdf } from "./pdf";
+import { PDF_FAILURES_PER_DAY, PDF_PER_DAY, renderPdf } from "./pdf";
+import { pdfHtml } from "./pdf-template";
 import { migrate, rowCounts, schemaVersion } from "./storage/migrations";
 import { armAlarm, runDueTasks, schedule } from "./storage/tasks";
 import { fetchPage } from "./ai/fetch-url";
@@ -84,6 +85,7 @@ function sharedText(json: string) {
 }
 
 const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+const INTERNAL = error(500, "internal_error", "object without a user id");
 
 /** One instance per user, named by the user id. The only stateful component. */
 export class UserDO extends DurableObject<Env> {
@@ -109,6 +111,17 @@ export class UserDO extends DurableObject<Env> {
 
 	protected setMeta(key: string, value: string): void {
 		this.sql.exec("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", key, value);
+	}
+
+	/**
+	 * This object's user id (its name; api.ts addresses objects only by name). Null, with a metric, if the runtime ever
+	 * hands over an object without one: the callers then answer 500 instead of hashing or comparing an empty id.
+	 */
+	private selfId(): string | null {
+		const id = this.ctx.id.name;
+		if (id) return id;
+		systemEvent(this.env, { event: "internal_error", reason: "object_without_name" });
+		return null;
 	}
 
 	private event(e: Parameters<typeof userEvent>[2]): void {
@@ -157,11 +170,18 @@ export class UserDO extends DurableObject<Env> {
 		return rev;
 	}
 
-	/** Running total of the stored JSON bytes of live recipes; set up from the table once for objects that predate it. */
+	/**
+	 * Running total of the stored JSON bytes of live recipes and their translations; set up from the tables once for
+	 * objects that predate it.
+	 */
 	private recipeBytes(): number {
 		const stored = this.meta("recipe_bytes");
 		if (stored !== null) return Number(stored);
-		const total = this.sql.exec<{ n: number }>("SELECT coalesce(sum(length(CAST(json AS BLOB))), 0) AS n FROM recipes WHERE deleted = 0").one().n;
+		const total = this.sql
+			.exec<{ n: number }>(
+				"SELECT (SELECT coalesce(sum(length(CAST(json AS BLOB))), 0) FROM recipes WHERE deleted = 0) + (SELECT coalesce(sum(length(CAST(json AS BLOB))), 0) FROM translations) AS n",
+			)
+			.one().n;
 		this.setMeta("recipe_bytes", String(total));
 		return total;
 	}
@@ -311,7 +331,8 @@ export class UserDO extends DurableObject<Env> {
 			const existing = this.sql.exec<{ deleted: number; json: string | null }>("SELECT deleted, json FROM recipes WHERE id = ?", id).toArray()[0];
 			if (!existing) return error(404, "not_found", "recipe not found");
 			if (existing.deleted === 0) {
-				const freed = existing.json === null ? 0 : utf8Length(existing.json);
+				const translated = this.sql.exec<{ n: number }>("SELECT coalesce(sum(length(CAST(json AS BLOB))), 0) AS n FROM translations WHERE recipe_id = ?", id).one().n;
+				const freed = (existing.json === null ? 0 : utf8Length(existing.json)) + translated;
 				const total = this.recipeBytes();
 				this.sql.exec("UPDATE recipes SET rev = ?, deleted = 1, updated_at = ?, json = NULL WHERE id = ?", this.nextRev(), now, id);
 				this.setMeta("recipe_bytes", String(total - freed));
@@ -529,15 +550,10 @@ export class UserDO extends DurableObject<Env> {
 	report(secretHash: string, r: { kind: string; jobId: string; reason: string; note: string }): Promise<Result> {
 		return this.run("reports", secretHash, async (now) => {
 			if (!this.job(r.jobId)) return error(404, "not_found", "job not found");
-			const inserted = this.sql.exec(
-				"INSERT INTO reports (at, kind, job_key, reason, note) VALUES (?, ?, ?, ?, ?) ON CONFLICT (job_key, kind) DO NOTHING",
-				now,
-				r.kind,
-				r.jobId,
-				r.reason,
-				r.note,
-			);
-			if (inserted.rowsWritten === 0) return { status: 204 };
+			// A SELECT, not rowsWritten: an INSERT ... ON CONFLICT DO NOTHING into this AUTOINCREMENT table reports a write even
+			// when it inserted nothing. One report per job and kind; a repeat changes nothing.
+			if (this.sql.exec("SELECT 1 FROM reports WHERE job_key = ? AND kind = ?", r.jobId, r.kind).toArray().length) return { status: 204 };
+			this.sql.exec("INSERT INTO reports (at, kind, job_key, reason, note) VALUES (?, ?, ?, ?, ?)", now, r.kind, r.jobId, r.reason, r.note);
 			this.event({ event: "report", kind: r.kind, reason: r.reason });
 			await this.scheduleExpiry(now + REPORT_DAYS * DAY_MS);
 			return { status: 204 };
@@ -554,16 +570,25 @@ export class UserDO extends DurableObject<Env> {
 				// Deleted while the job ran: nothing to attach the translation to.
 				outcome = { status: "failed" };
 			} else {
+				const json = JSON.stringify(outcome.translation);
+				const replaced = this.sql.exec<{ json: string }>("SELECT json FROM translations WHERE recipe_id = ? AND lang = ?", recipeId, language).toArray()[0];
+				const total = this.recipeBytes() - (replaced ? utf8Length(replaced.json) : 0) + utf8Length(json);
+				if (total > RECIPE_STORAGE_CAP) {
+					// Translations count toward the 20 MB of recipe text like the recipes themselves.
+					outcome = { status: "invalid" };
+				} else {
 				// Changed while the job ran: the translation is kept, already marked stale (AC22).
 				this.sql.exec(
 					"INSERT INTO translations (recipe_id, lang, stale, json) VALUES (?, ?, ?, ?) ON CONFLICT (recipe_id, lang) DO UPDATE SET stale = excluded.stale, json = excluded.json",
 					recipeId,
 					language,
 					current.json === source ? 0 : 1,
-					JSON.stringify(outcome.translation),
+					json,
 				);
+				this.setMeta("recipe_bytes", String(total));
 				// A new revision, so the delta pull delivers the recipe with its translation.
 				this.sql.exec("UPDATE recipes SET rev = ?, updated_at = ? WHERE id = ?", this.nextRev(), now, recipeId);
+				}
 			}
 		}
 		const draft = outcome.status === "done" && "draft" in outcome ? JSON.stringify(outcome.draft) : null;
@@ -663,6 +688,8 @@ export class UserDO extends DurableObject<Env> {
 	/** POST /recipes/:id/shares: owner, subscriber, at most SHARES_PER_DAY a day. */
 	createShare(secretHash: string, recipeId: string): Promise<Result> {
 		return this.run("shares", secretHash, async (now) => {
+			const owner = this.selfId();
+			if (!owner) return INTERNAL;
 			const subscribed = await this.entitledNow(now);
 			if (!this.liveRecipe(recipeId)) return error(404, "not_found", "recipe not found");
 			if (!subscribed) {
@@ -673,7 +700,7 @@ export class UserDO extends DurableObject<Env> {
 				this.event({ event: "share", outcome: "share_limit" });
 				return error(429, "share_limit", `at most ${SHARES_PER_DAY} new links a day`);
 			}
-			const screened = await this.screenPictures(recipeId);
+			const screened = await this.screenPictures(recipeId, now);
 			if (screened) return screened;
 			// Checked again after the awaits above; from here on everything runs in one step.
 			if (!this.liveRecipe(recipeId)) return error(404, "not_found", "recipe not found");
@@ -683,7 +710,7 @@ export class UserDO extends DurableObject<Env> {
 			this.sql.exec("INSERT INTO shares (share_id, recipe_id, created_at, expires_at) VALUES (?, ?, ?, ?)", shareId, recipeId, now, expiresAt);
 			await this.scheduleExpiry(expiresAt);
 			this.event({ event: "share", outcome: "created" });
-			return { status: 201, body: { shareId, token: await newShareToken(this.ctx.id.name!, shareId, this.env), expiresAt: isoTime(expiresAt) } };
+			return { status: 201, body: { shareId, token: await newShareToken(owner, shareId, this.env), expiresAt: isoTime(expiresAt) } };
 		}, true);
 	}
 
@@ -691,7 +718,7 @@ export class UserDO extends DurableObject<Env> {
 	 * Share-time picture check (plan 4.5): every listed picture not checked yet goes to the model once, and the result is
 	 * kept with the picture. Null when the recipe may be shared, otherwise the answer to give.
 	 */
-	private async screenPictures(recipeId: string): Promise<Result | null> {
+	private async screenPictures(recipeId: string, now: number): Promise<Result | null> {
 		const recipe = JSON.parse(this.liveRecipe(recipeId)!.json!) as RecipeInput;
 		if (recipe.imageIds.length === 0) return null;
 		// Only a recipe with pictures makes a model call, so only then is consent needed (AC12).
@@ -703,6 +730,12 @@ export class UserDO extends DurableObject<Env> {
 		for (const id of recipe.imageIds) {
 			const image = picture(id);
 			if (!image || image.screened_ok !== null) continue;
+			// Per user and day, so retries after a 422 or 503 (which create no share) cannot call the model without end.
+			if (this.counter(now, "screen_calls") >= SCREENS_PER_DAY) {
+				this.event({ event: "screen", outcome: "limited" });
+				return error(429, "share_limit", `at most ${SCREENS_PER_DAY} picture checks a day`);
+			}
+			this.bump(now, "screen_calls", 1);
 			// Its own global key, so share checks cannot use up the ceiling that paid imports depend on.
 			if (!(await this.env.RL_GLOBAL.limit({ key: "screen-image" })).success) {
 				systemEvent(this.env, { event: "rate_limited", route: "screen-image" });
@@ -810,7 +843,8 @@ export class UserDO extends DurableObject<Env> {
 	/** GET /shares/:token for the signed-in recipient: authenticated here first, then the owner is asked. */
 	previewShare(secretHash: string, ownerId: string, shareId: string): Promise<Result> {
 		return this.run("shares", secretHash, async () => {
-			const me = this.ctx.id.name!;
+			const me = this.selfId();
+			if (!me) return INTERNAL;
 			if (ownerId === me) return error(409, "own_share", "this is your own link");
 			return this.owner(ownerId).readShare(shareId, await sha256Hex(me));
 		});
@@ -823,7 +857,8 @@ export class UserDO extends DurableObject<Env> {
 	 */
 	acceptShare(secretHash: string, ownerId: string, shareId: string): Promise<Result> {
 		return this.run("shares", secretHash, async (now) => {
-			const me = this.ctx.id.name!;
+			const me = this.selfId();
+			if (!me) return INTERNAL;
 			if (ownerId === me) return error(409, "own_share", "this is your own link");
 			const copyId = await derivedId(`${shareId}:${me}`);
 			const existing = this.liveRecipe(copyId);
@@ -831,6 +866,11 @@ export class UserDO extends DurableObject<Env> {
 				this.event({ event: "share", outcome: "accept_existing" });
 				return { status: 200, body: this.recipeViews([existing])[0] };
 			}
+			// Coarse checks before a recipient slot is taken, so a recipient at a limit does not use up one of the ten.
+			if (this.sql.exec<{ n: number }>("SELECT count(*) AS n FROM recipes WHERE deleted = 0").one().n >= MAX_RECIPES) {
+				return error(409, "recipe_limit", `at most ${MAX_RECIPES} recipes`);
+			}
+			if (this.recipeBytes() >= RECIPE_STORAGE_CAP) return error(413, "recipe_storage_cap", "stored recipe text is at 20 MB");
 			const subscribed = await this.entitledNow(now);
 			const reserved = await this.owner(ownerId).reserveAccept(shareId, await sha256Hex(me));
 			if (reserved.status !== 200) return reserved;
@@ -876,7 +916,9 @@ export class UserDO extends DurableObject<Env> {
 	/** POST /reports with kind "share": recorded here, and the owner's link is revoked. */
 	reportShare(secretHash: string, ownerId: string, shareId: string, reason: string, note: string): Promise<Result> {
 		return this.run("reports", secretHash, async (now) => {
-			if (ownerId === this.ctx.id.name) return error(409, "own_share", "this is your own link");
+			const me = this.selfId();
+			if (!me) return INTERNAL;
+			if (ownerId === me) return error(409, "own_share", "this is your own link");
 			const revoked = await this.owner(ownerId).revokeShare(shareId);
 			if (revoked.status !== 204) return revoked;
 			// One report per share and reporter; a repeat changes nothing.
@@ -898,18 +940,32 @@ export class UserDO extends DurableObject<Env> {
 		return this.env.BROWSER;
 	}
 
-	private pdfsToday(now: number): number {
-		return this.sql.exec<{ count: number }>("SELECT count FROM daily_counters WHERE day = ? AND key = 'pdf_rendered'", day(now)).toArray()[0]?.count ?? 0;
+	/** A per-day counter of this user in daily_counters (also kept 90 days, like the request counts). */
+	private counter(now: number, key: string): number {
+		return this.sql.exec<{ count: number }>("SELECT count FROM daily_counters WHERE day = ? AND key = ?", day(now), key).toArray()[0]?.count ?? 0;
 	}
 
-	/** GET /recipes/:id/pdf: free, PDF_PER_DAY per user and UTC day; a failed render does not count. */
+	private bump(now: number, key: string, delta: number): void {
+		this.sql.exec(
+			"INSERT INTO daily_counters (day, key, count) VALUES (?, ?, ?) ON CONFLICT (day, key) DO UPDATE SET count = count + excluded.count",
+			day(now),
+			key,
+			delta,
+		);
+	}
+
+	/**
+	 * GET /recipes/:id/pdf: free, PDF_PER_DAY per user and UTC day; a failed render does not count against that, but
+	 * against PDF_FAILURES_PER_DAY, so repeated failures cannot use browser time without end.
+	 */
 	pdf(secretHash: string, recipeId: string): Promise<Result> {
 		return this.run("pdf", secretHash, async (now) => {
 			const row = this.liveRecipe(recipeId);
 			if (!row) return error(404, "not_found", "recipe not found");
 			const browser = this.browser();
 			if (!browser) return error(503, "pdf_unavailable", "PDF rendering is not configured in this environment");
-			if (this.pdfsToday(now) >= PDF_PER_DAY) {
+			const limited = () => this.counter(now, "pdf_rendered") >= PDF_PER_DAY || this.counter(now, "pdf_failed") >= PDF_FAILURES_PER_DAY;
+			if (limited()) {
 				this.event({ event: "pdf", outcome: "limited" });
 				return error(429, "pdf_limit", `at most ${PDF_PER_DAY} PDFs a day`);
 			}
@@ -918,25 +974,21 @@ export class UserDO extends DurableObject<Env> {
 				systemEvent(this.env, { event: "rate_limited", route: "pdf" });
 				return error(429, "rate_limited", "PDF rendering is busy; try again later");
 			}
-			// Counted before the render, so parallel requests cannot pass the daily limit; given back if the render fails.
-			if (this.pdfsToday(now) >= PDF_PER_DAY) return error(429, "pdf_limit", `at most ${PDF_PER_DAY} PDFs a day`);
-			const count = (delta: number) =>
-				this.sql.exec(
-					"INSERT INTO daily_counters (day, key, count) VALUES (?, 'pdf_rendered', ?) ON CONFLICT (day, key) DO UPDATE SET count = count + excluded.count",
-					day(now),
-					delta,
-				);
-			count(1);
+			// Counted as both before the render, so parallel requests cannot pass either limit; the outcome then takes one back.
+			if (limited()) return error(429, "pdf_limit", `at most ${PDF_PER_DAY} PDFs a day`);
+			this.bump(now, "pdf_rendered", 1);
+			this.bump(now, "pdf_failed", 1);
 			const recipe = JSON.parse(row.json!) as RecipeInput;
 			const pictures = recipe.imageIds.flatMap((id) =>
 				this.sql.exec<{ mime: string; bytes: ArrayBuffer }>("SELECT mime, bytes FROM images WHERE id = ? AND recipe_id = ?", id, recipeId).toArray(),
 			);
 			const bytes = await renderPdf(browser, pdfHtml(recipe, pictures));
 			if (!bytes) {
-				count(-1);
+				this.bump(now, "pdf_rendered", -1);
 				this.event({ event: "pdf", outcome: "unavailable" });
 				return error(503, "pdf_unavailable", "the PDF could not be made; try again later");
 			}
+			this.bump(now, "pdf_failed", -1);
 			this.event({ event: "pdf", outcome: "rendered" });
 			return {
 				status: 200,

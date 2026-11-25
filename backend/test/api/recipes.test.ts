@@ -287,7 +287,24 @@ describe("session revoked while a write waits for the rate limiter", () => {
 
 describe("stored recipe text cap (20 MB per user)", () => {
 	const counter = (s: Session) => inObject(s.userId, (_i, st) => Number(st.storage.sql.exec("SELECT value FROM meta WHERE key = 'recipe_bytes'").one().value));
-	const fresh = (s: Session) => inObject(s.userId, (_i, st) => st.storage.sql.exec("SELECT coalesce(sum(length(CAST(json AS BLOB))), 0) AS n FROM recipes WHERE deleted = 0").one().n as number);
+	/** Recipes and their translations (translations count toward the same 20 MB, security review M5). */
+	const fresh = (s: Session) =>
+		inObject(
+			s.userId,
+			(_i, st) =>
+				st.storage.sql
+					.exec(
+						"SELECT (SELECT coalesce(sum(length(CAST(json AS BLOB))), 0) FROM recipes WHERE deleted = 0) + (SELECT coalesce(sum(length(CAST(json AS BLOB))), 0) FROM translations) AS n",
+					)
+					.one().n as number,
+		);
+	/** A translation through the real route; the local AI stand-in answers (env.AI is unset in this file). */
+	const translate = async (s: Session, id: string, language: string) => {
+		const key = uuid();
+		const res = await call(`/recipes/${id}/translations`, { method: "POST", token: s.token, body: JSON.stringify({ language }), headers: { "content-type": "application/json", "idempotency-key": key } });
+		expect(res.status).toBe(202);
+		await vi.waitFor(async () => expect(((await (await call(`/jobs/${key}`, { token: s.token })).json()) as { status: string }).status).toBe("done"), { timeout: 5000, interval: 20 });
+	};
 	/** Fixture: stored recipes (1 MB each, a row's size limit is below 20 MB) filling the cap up to `free` bytes; returns their ids. */
 	const fill = (s: Session, free: number) =>
 		inObject(s.userId, (_i, st) => {
@@ -334,6 +351,19 @@ describe("stored recipe text cap (20 MB per user)", () => {
 		await call(`/recipes/${b}`, { method: "DELETE", token: s.token });
 		await put(s, input(b));
 		await call(`/recipes/${c}`, { method: "DELETE", token: s.token });
+		expect(await counter(s)).toBe(await fresh(s));
+		// Translations: added, replaced, and freed with their recipe.
+		await inObject(s.userId, (_i, st) => {
+			st.storage.sql.exec("INSERT INTO meta (key, value) VALUES ('consent_version', '1'), ('entitlement', ?)", JSON.stringify({ active: true, expiresAt: null }));
+		});
+		await translate(s, a, "en");
+		await translate(s, a, "fr");
+		await translate(s, b, "en");
+		await put(s, input(a, { description: "kurz" }), { "if-match": `"${(await inObject(s.userId, (_i, st) => st.storage.sql.exec("SELECT rev FROM recipes WHERE id = ?", a).one().rev)) as number}"` });
+		await translate(s, a, "en");
+		expect(await counter(s)).toBe(await fresh(s));
+		await call(`/recipes/${a}`, { method: "DELETE", token: s.token });
+		expect(await inObject(s.userId, (_i, st) => st.storage.sql.exec("SELECT count(*) AS n FROM translations").one().n)).toBe(1);
 		expect(await counter(s)).toBe(await fresh(s));
 		await inObject(s.userId, async (instance, st) => {
 			st.storage.sql.exec("UPDATE recipes SET updated_at = 0 WHERE deleted = 1");

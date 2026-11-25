@@ -255,6 +255,16 @@ describe("translation charging and refusals", () => {
 		expect((await recipes(b.s))[0]).not.toHaveProperty("translations");
 	});
 
+	it("a translation that would pass the 20 MB of recipe text ends as invalid with a refund", async () => {
+		const { s, recipeId } = await ready();
+		await setMeta(s, "recipe_bytes", String(20_971_520 - 10));
+		const key = uuid();
+		await translate(s, recipeId, key);
+		expect((await settle(s, key)).status).toBe("invalid");
+		expect((await monthUsed(s)).monthUsed).toBe(0);
+		expect(await inObject(s.userId, (_i, st) => st.storage.sql.exec("SELECT count(*) AS n FROM translations").one().n)).toBe(0);
+	});
+
 	it("409 job_running while another job of the user is open", async () => {
 		const { s, recipeId } = await ready();
 		fakeAi(() => new Promise(() => {}));

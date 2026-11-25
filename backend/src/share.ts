@@ -12,7 +12,9 @@ export const SHARE_TTL_MS = 30 * DAY_MS;
 export const SHARE_RECIPIENT_LIMIT = 10;
 /** New links per subscriber and UTC day. */
 export const SHARES_PER_DAY = 10;
-/** A report reference opens for this long (plan 4.10). */
+/** Picture checks (vision model calls) per user and UTC day; a failed share creation still uses them. */
+export const SCREENS_PER_DAY = 30;
+/** A report reference is accepted for this long (plan 4.10); a timestamp check, see reportReference. */
 export const REPORT_REFERENCE_TTL_MS = 30 * DAY_MS;
 
 const SHARE_KEY_INFO = "recipes/share-token/v1";
@@ -86,7 +88,9 @@ export async function derivedId(input: string): Promise<string> {
 
 /**
  * The only user reference a share-report metric carries (plan 4.10): AES-GCM over the creation time and the owner's
- * user id, with its own subkey. The admin page opens it for 30 days; after that it opens to nothing.
+ * user id, with its own subkey. The 30 days are not enforced by the cryptography: openReportReference compares the
+ * sealed timestamp. Whoever holds SERVER_KEY (or SERVER_KEY_PREVIOUS while it is set) can decrypt a reference of any
+ * age until that key is rotated out.
  */
 export async function reportReference(userId: string, now: number, env: KeyEnv): Promise<string> {
 	const iv = crypto.getRandomValues(new Uint8Array(12));

@@ -41,13 +41,14 @@ export type SystemEvent =
 	// type: one of the known RevenueCat event types or "OTHER"; never the user id or anything else from the payload.
 	| { event: "billing_webhook"; type: string }
 	// The reported account only as an encrypted reference (share.ts reportReference), never its user id (plan 4.10).
-	| { event: "share_report"; reason: string; reference: string };
+	| { event: "share_report"; reason: string; reference: string }
+	| { event: "internal_error"; reason: string };
 
 export function systemEvent(env: Env, e: SystemEvent): void {
 	if (e.event === "share_report") {
 		env.METRICS.writeDataPoint({ blobs: [e.event, e.reason, e.reference], doubles: [1] });
 		return;
 	}
-	const detail = e.event === "auth_failure" ? e.reason : e.event === "rate_limited" ? e.route : e.event === "billing_webhook" ? e.type : e.provider;
+	const detail = e.event === "auth_failure" || e.event === "internal_error" ? e.reason : e.event === "rate_limited" ? e.route : e.event === "billing_webhook" ? e.type : e.provider;
 	env.METRICS.writeDataPoint({ blobs: [e.event, detail], doubles: [1] });
 }
