@@ -1,3 +1,4 @@
+import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import meFixture from "../../../contract/fixtures/me.json";
 import requestFixture from "../../../contract/fixtures/session_request.json";
@@ -5,7 +6,7 @@ import sessionFixture from "../../../contract/fixtures/session_response.json";
 import { testIdToken } from "../../src/testing/test-idp";
 import { DAY_MS, SESSION_TTL_MS } from "../../src/user-do";
 import { vi } from "vitest";
-import { TURNSTILE_OK, call, freshIp, inObject, interceptOutbound, json, nonce, providerToken, signIn } from "./helpers";
+import { TURNSTILE_OK, call, freshIp, inObject, interceptOutbound, json, nonce, providerToken, signIn, userStub } from "./helpers";
 
 beforeEach(() => {
 	interceptOutbound();
@@ -235,9 +236,11 @@ describe("write limits only after authentication", () => {
 
 	it("the per-user write limit still applies to an authenticated user", async () => {
 		const s = await signIn();
-		const statuses: number[] = [];
-		for (let i = 0; i < 125; i++) statuses.push((await call(`/recipes/${crypto.randomUUID()}`, { method: "DELETE", token: s.token })).status);
-		expect(statuses).toContain(429);
+		// The binding decides; the test does not race its 60-second window (that made the old loop of 125 writes flaky).
+		const limit = vi.spyOn(env.RL_USER, "limit").mockResolvedValue({ success: false });
+		const res = await call(`/recipes/${crypto.randomUUID()}`, { method: "DELETE", token: s.token });
+		expect([res.status, ((await res.json()) as { error: { code: string } }).error.code]).toEqual([429, "rate_limited"]);
+		expect(limit).toHaveBeenCalledWith({ key: userStub(s.userId).id.toString() });
 		expect((await call("/me", { token: s.token })).status).toBe(200); // reads are not limited
 	});
 });

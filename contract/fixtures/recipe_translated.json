@@ -1,0 +1,33 @@
+{
+  "id": "0b9f6c1e-3a52-4d0f-9a43-2f1d0c6b7e11",
+  "rev": 8,
+  "deleted": false,
+  "updatedAt": "2026-11-25T10:00:05Z",
+  "title": "Kartoffelsalat",
+  "description": "",
+  "servings": 4,
+  "prepMinutes": 20,
+  "cookMinutes": 25,
+  "ingredients": [
+    { "quantity": "1", "unit": "kg", "item": "Kartoffeln", "group": null }
+  ],
+  "steps": ["Kartoffeln kochen."],
+  "tags": ["Beilage"],
+  "sourceUrl": null,
+  "sourceType": "manual",
+  "language": "de",
+  "imageIds": [],
+  "translations": [
+    {
+      "language": "en",
+      "stale": false,
+      "title": "Potato salad",
+      "description": "",
+      "ingredients": [
+        { "quantity": "1", "unit": "kg", "item": "Potatoes", "group": null }
+      ],
+      "steps": ["Boil the potatoes."],
+      "tags": ["Side dish"]
+    }
+  ]
+}

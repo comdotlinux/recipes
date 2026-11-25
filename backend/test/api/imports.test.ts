@@ -389,6 +389,11 @@ describe("jobs and reports", () => {
 		expect(res.status).toBe(204);
 		const rows = await inObject(s.userId, (_i, st) => st.storage.sql.exec("SELECT kind, job_key, reason, note FROM reports").toArray());
 		expect(rows).toEqual([{ kind: "import_result", job_key: key, reason: "wrong_content", note: "falsche Mengen" }]);
+		// A repeat changes nothing and writes no second metric (security review M5).
+		const write = vi.spyOn(env.METRICS, "writeDataPoint");
+		expect((await call("/reports", { method: "POST", token: s.token, body, headers: { "content-type": "application/json" } })).status).toBe(204);
+		expect(write.mock.calls.filter((c) => c[0]?.blobs?.[0] === "report")).toHaveLength(0);
+		expect(await inObject(s.userId, (_i, st) => st.storage.sql.exec("SELECT count(*) AS n FROM reports").one().n)).toBe(1);
 		const other = JSON.stringify({ ...reportFixture, jobId: uuid() });
 		expect((await call("/reports", { method: "POST", token: s.token, body: other, headers: {} })).status).toBe(404);
 		expect(await code(await call("/reports", { method: "POST", token: s.token, body: JSON.stringify({ ...reportFixture, reason: "x" }), headers: {} }))).toBe("invalid_body");

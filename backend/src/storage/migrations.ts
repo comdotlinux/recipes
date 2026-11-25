@@ -37,6 +37,22 @@ export const MIGRATIONS: Migration[] = [
 			"CREATE TABLE reports (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, kind TEXT NOT NULL, job_key TEXT, reason TEXT NOT NULL, note TEXT NOT NULL, UNIQUE (job_key, kind))",
 		);
 	},
+	// v4 (M4): one translation per recipe and language; stale once the source recipe's content changed
+	(sql) => {
+		sql.exec(
+			"CREATE TABLE translations (recipe_id TEXT NOT NULL, lang TEXT NOT NULL, stale INTEGER NOT NULL DEFAULT 0, json TEXT NOT NULL, PRIMARY KEY (recipe_id, lang))",
+		);
+	},
+	// v5 (M5): share links and their recipients (a hash of each recipient's user id, never the id itself)
+	(sql) => {
+		sql.exec(
+			"CREATE TABLE shares (share_id TEXT PRIMARY KEY, recipe_id TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)",
+		);
+		sql.exec("CREATE INDEX shares_created ON shares (created_at)");
+		sql.exec(
+			"CREATE TABLE share_accepts (share_id TEXT NOT NULL, recipient_hash TEXT NOT NULL, accepted_at INTEGER NOT NULL, PRIMARY KEY (share_id, recipient_hash))",
+		);
+	},
 ];
 
 // GLOB, not LIKE: "_" is a wildcard in LIKE. _cf_* tables are internal to the runtime.

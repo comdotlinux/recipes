@@ -1,0 +1,20 @@
+{
+  "id": "5b8e1f0a-2c3d-4e5f-a6b7-c8d9e0f1a2b3",
+  "rev": 12,
+  "deleted": false,
+  "updatedAt": "2026-11-25T11:00:00Z",
+  "title": "Kartoffelsalat",
+  "description": "",
+  "servings": 4,
+  "prepMinutes": 20,
+  "cookMinutes": 25,
+  "ingredients": [
+    { "quantity": "1", "unit": "kg", "item": "Kartoffeln", "group": null }
+  ],
+  "steps": ["Kartoffeln kochen."],
+  "tags": ["Beilage"],
+  "sourceUrl": null,
+  "sourceType": "shared",
+  "language": "de",
+  "imageIds": ["9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"]
+}

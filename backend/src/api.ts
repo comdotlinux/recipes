@@ -13,9 +13,11 @@ import {
 import { type Result, error, toResponse } from "./http";
 import { MAX_TEXT_CHARS, validateUrl } from "./ai/fetch-url";
 import { ALLOWED_MIME, MAX_IMAGE_BYTES, sniffImage } from "./images";
+import { TRANSLATION_LANGUAGES } from "./ai/translate";
 import { systemEvent } from "./metrics";
 import { ID_PATTERN, MAX_RECIPE_BYTES, RecipeInput, isId } from "./recipes";
-import type { UserDO } from "./user-do";
+import { SHARE_ID, openShareToken } from "./share";
+import { type UserDO, userNamespace } from "./user-do";
 
 export type TestProvider = (idToken: string, nonce: string) => Promise<{ sub: string } | null>;
 
@@ -39,6 +41,11 @@ const turnstilePage = (siteKey: string) => `<!doctype html>
 </body>
 </html>
 `;
+
+/** Android application id and iOS bundle id of the app (owner, 2026-11-25). */
+const APP_ID = "com.linux.recipes";
+const CERT_FINGERPRINT = /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/;
+const LANDING_CSP = "default-src 'none'; script-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 const reply = (c: C, r: Result) => {
 	c.res = toResponse(r);
@@ -70,6 +77,13 @@ type UserObject = Pick<
 	| "clearConsent"
 	| "startImport"
 	| "getJob"
+	| "startTranslation"
+	| "createShare"
+	| "deleteShare"
+	| "previewShare"
+	| "acceptShare"
+	| "reportShare"
+	| "pdf"
 	| "report"
 	| "refreshFromClient"
 	| "entitlementChanged"
@@ -112,7 +126,7 @@ async function webhookAuthorized(header: string | undefined, secret: string | un
 
 /** The only way to an object: the user id comes from the authenticated token, never from the client. */
 const userObject = (env: Env, userId: string): UserObject => {
-	const ns = env.DO_JURISDICTION ? env.USER_DO.jurisdiction(env.DO_JURISDICTION) : env.USER_DO;
+	const ns = userNamespace(env);
 	return ns.get(ns.idFromName(userId)) as unknown as UserObject;
 };
 
@@ -162,6 +176,37 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 		c.header("content-security-policy", TURNSTILE_CSP);
 		c.header("x-content-type-options", "nosniff");
 		return c.html(turnstilePage(siteKey));
+	});
+
+	// docs/api.md "Milestone M5": a share link opened without the app, `/s#<token>`. The token is in the fragment, which
+	// browsers never send, so it reaches neither this Worker nor any log. The page is static and shows nothing of the recipe.
+	app.get("/s", async (c) => {
+		const page = await c.env.ASSETS.fetch(new URL("/s/", c.req.url));
+		return new Response(page.body, {
+			status: page.ok ? 200 : 404,
+			headers: {
+				"content-type": "text/html; charset=utf-8",
+				"content-security-policy": LANDING_CSP,
+				"x-content-type-options": "nosniff",
+				"referrer-policy": "no-referrer",
+				"cache-control": "no-store",
+			},
+		});
+	});
+
+	// App Links and Universal Links for share links. The values come from the environment at request time and are filled
+	// by the provisioning step; until then (or when malformed) the files answer 404.
+	app.get("/.well-known/assetlinks.json", (c) => {
+		const prints = (c.env.ANDROID_CERT_SHA256 ?? "").split(",").map((p) => p.trim().toUpperCase());
+		if (!prints.every((p) => CERT_FINGERPRINT.test(p))) return fail(c, 404, "not_found", "ANDROID_CERT_SHA256 is not set");
+		return c.json([
+			{ relation: ["delegate_permission/common.handle_all_urls"], target: { namespace: "android_app", package_name: APP_ID, sha256_cert_fingerprints: prints } },
+		]);
+	});
+	app.get("/.well-known/apple-app-site-association", (c) => {
+		const team = c.env.APPLE_TEAM_ID ?? "";
+		if (!/^[A-Z0-9]{10}$/.test(team)) return fail(c, 404, "not_found", "APPLE_TEAM_ID is not set");
+		return c.json({ applinks: { details: [{ appIDs: [`${team}.${APP_ID}`], components: [{ "/": "/s", comment: "share links; the token is in the fragment" }] }] } });
 	});
 
 	app.post("/v1/session/nonce", async (c) => {
@@ -353,12 +398,85 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 		authed(async (o, a, c) => (ids(c, "id") ? o.getJob(a.secretHash, c.req.param("id")!) : error(400, "invalid_id", "id must be a lowercase UUID"))),
 	);
 
-	const ReportBody = z.strictObject({
-		kind: z.literal("import_result"),
-		jobId: z.string().regex(ID_PATTERN),
-		reason: z.enum(["wrong_content", "offensive", "other"]),
-		note: z.string().max(1000).optional(),
-	});
+	// docs/api.md "Milestone M4": a translation job, polled through GET /jobs/:id like an import.
+	app.post(
+		"/v1/recipes/:id/translations",
+		authed(async (o, a, c) => {
+			if (!ids(c, "id")) return error(400, "invalid_id", "id must be a lowercase UUID");
+			const key = c.req.header("idempotency-key") ?? "";
+			if (!isId(key)) return error(400, "invalid_id", "Idempotency-Key must be a lowercase UUID");
+			const body = await readJson(c, 1024);
+			if ("fail" in body) return body.fail;
+			const parsed = z.strictObject({ language: z.enum(TRANSLATION_LANGUAGES) }).safeParse(body.value);
+			if (!parsed.success) return error(400, "invalid_body", `send { language } with one of ${TRANSLATION_LANGUAGES.join(", ")}`);
+			return o.startTranslation(a.secretHash, key, c.req.param("id")!, parsed.data.language);
+		}),
+	);
+
+	/**
+	 * The share token from the body (never a URL: proxies and request logs keep URLs), opened here: one that does not
+	 * authenticate is a 404 before any object is used.
+	 */
+	const sharedBy = async (c: C, token: string) => {
+		const opened = await openShareToken(token, c.env);
+		if (!opened) systemEvent(c.env, { event: "auth_failure", reason: "share_token" });
+		return opened;
+	};
+	const SHARE_NOT_FOUND = error(404, "not_found", "no such share");
+
+	// docs/api.md "Milestone M5": sharing a recipe by link.
+	app.post(
+		"/v1/recipes/:id/shares",
+		authed(async (o, a, c) => {
+			if (!ids(c, "id")) return error(400, "invalid_id", "id must be a lowercase UUID");
+			const result = await o.createShare(a.secretHash, c.req.param("id")!);
+			if (result.status !== 201) return result;
+			const body = result.body as { token: string };
+			return { ...result, body: { ...body, url: `${new URL(c.req.url).origin}/s#${body.token}` } };
+		}),
+	);
+
+	app.delete(
+		"/v1/shares/:shareId",
+		authed(async (o, a, c) => (SHARE_ID.test(c.req.param("shareId")!) ? o.deleteShare(a.secretHash, c.req.param("shareId")!) : error(400, "invalid_id", "not a share id"))),
+	);
+
+	/** `{ shareToken }` from the body, opened; or the answer to give. */
+	const shareFromBody = async (c: C) => {
+		const body = await readJson(c, 1024);
+		if ("fail" in body) return body.fail;
+		const parsed = z.strictObject({ shareToken: z.string().max(200) }).safeParse(body.value);
+		if (!parsed.success) return error(400, "invalid_body", "send { shareToken }");
+		return (await sharedBy(c, parsed.data.shareToken)) ?? SHARE_NOT_FOUND;
+	};
+
+	app.post(
+		"/v1/shares/open",
+		authed(async (o, a, c) => {
+			const share = await shareFromBody(c);
+			return "ownerId" in share ? o.previewShare(a.secretHash, share.ownerId, share.shareId) : share;
+		}),
+	);
+
+	app.post(
+		"/v1/shares/accept",
+		authed(async (o, a, c) => {
+			const share = await shareFromBody(c);
+			return "ownerId" in share ? o.acceptShare(a.secretHash, share.ownerId, share.shareId) : share;
+		}),
+	);
+
+	// docs/api.md "Milestone M5": the recipe as a PDF.
+	app.get(
+		"/v1/recipes/:id/pdf",
+		authed(async (o, a, c) => (ids(c, "id") ? o.pdf(a.secretHash, c.req.param("id")!) : error(400, "invalid_id", "id must be a lowercase UUID"))),
+	);
+
+	const Reason = z.enum(["wrong_content", "offensive", "other"]);
+	const ReportBody = z.discriminatedUnion("kind", [
+		z.strictObject({ kind: z.enum(["import_result", "translation"]), jobId: z.string().regex(ID_PATTERN), reason: Reason, note: z.string().max(1000).optional() }),
+		z.strictObject({ kind: z.literal("share"), shareToken: z.string().max(200), reason: Reason, note: z.string().max(1000).optional() }),
+	]);
 
 	app.post(
 		"/v1/reports",
@@ -367,7 +485,11 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 			if ("fail" in body) return body.fail;
 			const parsed = ReportBody.safeParse(body.value);
 			if (!parsed.success) return error(400, "invalid_body", "body does not match Report");
-			return o.report(a.secretHash, { ...parsed.data, note: parsed.data.note ?? "" });
+			const r = parsed.data;
+			if (r.kind !== "share") return o.report(a.secretHash, { kind: r.kind, jobId: r.jobId, reason: r.reason, note: r.note ?? "" });
+			const share = await sharedBy(c, r.shareToken);
+			if (!share) return SHARE_NOT_FOUND;
+			return o.reportShare(a.secretHash, share.ownerId, share.shareId, r.reason, r.note ?? "");
 		}),
 	);
 

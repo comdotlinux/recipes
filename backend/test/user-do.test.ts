@@ -9,7 +9,7 @@ const tables = (sql: SqlStorage) =>
 		.map((r) => r.name);
 
 const stub = (name: string) => env.USER_DO.get(env.USER_DO.idFromName(name));
-const ALL = ["attempts", "daily_counters", "images", "jobs", "meta", "recipes", "reports", "sessions", "tasks", "usage", "used_nonces"];
+const ALL = ["attempts", "daily_counters", "images", "jobs", "meta", "recipes", "reports", "sessions", "share_accepts", "shares", "tasks", "translations", "usage", "used_nonces"];
 
 /** Turns the object back into the M0 (v1) schema with some rows, as a storage fixture. */
 function v1Fixture(storage: DurableObjectStorage) {
@@ -39,6 +39,26 @@ describe("UserDO migrations (AC31)", () => {
 			const after = rowCounts(state.storage.sql);
 			for (const [t, n] of before) expect([t, after.get(t)]).toEqual([t, n]);
 			expect(tables(state.storage.sql)).toEqual(ALL);
+		});
+	});
+
+	it("migrating an object at the M3 schema (v3) with data to the latest keeps every row count", async () => {
+		await runInDurableObject(stub("from-v3"), async (_instance, state) => {
+			const sql = state.storage.sql;
+			for (const t of tables(sql)) sql.exec(`DROP TABLE "${t}"`);
+			migrate(state.storage, MIGRATIONS.slice(0, 3));
+			sql.exec("INSERT INTO meta (key, value) VALUES ('state', 'active')");
+			sql.exec("INSERT INTO recipes (id, rev, deleted, updated_at, json) VALUES ('r1', 1, 0, 1, '{}'), ('r2', 2, 1, 2, NULL)");
+			sql.exec("INSERT INTO images (id, recipe_id, mime, bytes, size) VALUES ('i1', 'r1', 'image/jpeg', x'ffd8ff', 3)");
+			sql.exec("INSERT INTO jobs (job_key, kind, status, created_at) VALUES ('j1', 'import_text', 'done', 1)");
+			sql.exec("INSERT INTO usage (period, count) VALUES ('2026-11', 3)");
+			sql.exec("INSERT INTO reports (at, kind, job_key, reason, note) VALUES (1, 'import_result', 'j1', 'other', '')");
+			expect(schemaVersion(sql)).toBe(3);
+			const before = rowCounts(sql);
+			expect(migrate(state.storage)).toBe(MIGRATIONS.length);
+			const after = rowCounts(sql);
+			for (const [t, n] of before) expect([t, after.get(t)]).toEqual([t, n]);
+			expect(tables(sql)).toEqual(ALL);
 		});
 	});
 

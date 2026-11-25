@@ -176,7 +176,7 @@ The page calls whichever of the two exists. It loads script and frames only from
 ```jsonc
 // Report
 {
-  "kind": "import_result",        // later milestones add "translation" and "share"
+  "kind": "import_result",        // "import_result" | "translation" (M4); M5 adds "share" with its own body
   "jobId": "4c0e9a1b-7d2f-4e3a-9b8c-1f2e3d4c5b6a",
   "reason": "wrong_content",      // "wrong_content" | "offensive" | "other"
   "note": ""                      // 0..1000 characters, optional
@@ -238,6 +238,129 @@ Not called by the app. RevenueCat posts every subscription event to `POST /v1/we
 ### Local environment only
 
 `POST /v1/testing/entitlement` with the session token and `{ "active": true }` or `{ "active": false }` switches the signed-in user's subscription without RevenueCat (a 30-day subscription, or none) and answers like `POST /entitlement/refresh`. It exists only in the local entry, which has no RevenueCat key; see `backend/README.md`.
+
+## Milestone M4
+
+### Translations
+
+A subscriber can have a recipe translated by the model into one of the app's languages: `en`, `de`, `fr`, `es`, `it`, `pt`, `nl`, `pl`, `tr`, `sv`. Each translation costs one monthly unit; it never takes the free import.
+
+| Route | Request | Success | Errors |
+|-------|---------|---------|--------|
+| `POST /recipes/:id/translations` | header `Idempotency-Key: <lowercase UUID>` (the job id); `TranslationRequest` | 202 `TranslationJob` with `status: "pending"` | 400 `invalid_body` (not one of the ten languages); 400 `invalid_id` (path or key); 402 `subscription_required` (`entitlement.active` is false); 402 `quota_exhausted` (30 monthly units used); 403 `consent_required`; 404 (the recipe does not exist for this user, or is deleted); 409 `job_running` (another job of this user, import or translation, is open); 411 `length_required`; 429 `attempt_limit`; 429 `rate_limited` |
+| `GET /jobs/:id` | none | 200 `TranslationJob` | 404 as for imports |
+
+```jsonc
+// TranslationRequest
+{ "language": "en" }
+// TranslationJob: the ImportJob shape with kind "translation", draft always null, and the target
+{
+  "id": "6d1f2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b",
+  "kind": "translation",
+  "status": "done",               // the same five outcomes as an import
+  "createdAt": "2026-11-25T10:00:00Z",
+  "draft": null,
+  "recipeId": "0b9f6c1e-3a52-4d0f-9a43-2f1d0c6b7e11",
+  "language": "en"
+}
+```
+
+Where the result lives: on the server, with the recipe, one per language. When a translation job ends as `done`, the recipe gets a new `rev`, so the next `GET /recipes?since=` delivers it; the app does not fetch translations separately. A recipe that has at least one translation carries them in a `translations` array (fixture `recipe_translated.json`); a recipe without any has no `translations` field at all, so `recipe.json` is unchanged:
+
+```jsonc
+// Recipe, additional field (server to app only)
+"translations": [
+  {
+    "language": "en",
+    "stale": false,                 // true once the recipe's content changed after this translation was made
+    "title": "Potato salad",
+    "description": "",
+    "ingredients": [ { "quantity": "1", "unit": "kg", "item": "Potatoes", "group": null } ],
+    "steps": ["Boil the potatoes."],
+    "tags": ["Side dish"]
+  }
+]
+```
+
+Rules:
+- `translations` is never sent by the app: `RecipeInput` does not have it and a `PUT` with it is a 400. A `PUT` that changes the recipe's content marks every translation of that recipe `stale: true`; saving it unchanged does not. A new translation into the same language replaces the old one. Deleting the recipe deletes its translations.
+- A translation has exactly the source's number of ingredients, steps and tags, in the same order, and each ingredient keeps the source's `quantity` and `unit` unchanged (not converted). A model answer that breaks this, or a field rule of `RecipeInput`, ends the job as `invalid`.
+- If the recipe changed while the job ran, the translation is still stored and arrives already `stale: true`. If it was deleted meanwhile, the job ends as `failed` (refunded).
+- Because a finished translation raises the recipe's `rev`, an edit started before it arrived gets 412 on save; the app pulls and retries as for any other conflict.
+- Charging, outcomes, refunds, the daily attempt limit and the 10-minute timeout are those of imports (Milestone M2 and M3). A free user gets 402 `subscription_required`; the app shows the paywall.
+- `POST /reports` accepts `"kind": "translation"` with the translation job's id (same body as an import report).
+- `GET /me` `openJobId` names the open job of either kind.
+
+## Milestone M5
+
+### Sharing by link
+
+Only a subscriber can create a link (402 `subscription_required` otherwise). Anyone signed in can open a link and accept it. Accepting copies the recipe, with its pictures, into the recipient's own recipes; the copy is independent of the original from then on.
+
+| Route | Request | Success | Errors |
+|-------|---------|---------|--------|
+| `POST /recipes/:id/shares` | none | 201 `ShareCreated` | 400 `invalid_id`; 402 `subscription_required`; 403 `consent_required` (only when the recipe has pictures: they are checked by the model first); 404 (not this user's recipe); 422 `picture_rejected` (a picture failed the check; the app says which recipe and asks to remove the picture); 429 `share_limit` (10 new links, or 30 picture checks, per UTC day); 429 `rate_limited`; 503 `screening_unavailable` (try again later) |
+| `DELETE /shares/:shareId` | none | 204 | 400 `invalid_id`; 404 (not this user's share) |
+| `POST /shares/open` | `ShareTokenBody` | 200 `SharePreview` | 400 `invalid_body`; 404 `not_found` (not a valid link, or unknown); 409 `own_share`; 410 `share_gone`; 411 `length_required` |
+| `POST /shares/accept` | `ShareTokenBody` | 200 `Recipe` (the copy) | 400 `invalid_body`; 404; 409 `own_share`; 409 `recipe_limit`; 410 `share_gone`; 411 `length_required`; 413 `recipe_storage_cap`; 413 `storage_cap`; 422 `share_unreadable` (no readable text left, see below) |
+| `POST /reports` | `ShareReport` | 204 | 400 `invalid_body`; 404; 409 `own_share`; 410 `share_gone` |
+
+```jsonc
+// ShareCreated
+{
+  "shareId": "3f2a9c4d5e6b7a8f9c0d1e2f3a4b5c6d",   // the owner's handle for DELETE; 32 lowercase hex characters
+  "token": "<107 base64url characters>",          // the public value in the link
+  "expiresAt": "2026-12-25T10:00:00Z",           // 30 days after creation
+  "url": "https://<this host>/s#<token>"          // what the app hands to the share sheet; the token is in the fragment
+}
+// SharePreview: the recipe's text only, never pictures or anything else of the owner
+{
+  "recipe": { "title": "...", "description": "", "servings": 4, "prepMinutes": 20, "cookMinutes": 25,
+              "ingredients": [ ... ], "steps": [ ... ], "tags": [ ... ], "language": "de" },
+  "imageCount": 1,                                // pictures the copy will get
+  "expiresAt": "2026-12-25T10:00:00Z"
+}
+// ShareTokenBody (fixture share_token_body.json)
+{ "shareToken": "<token>" }
+// ShareReport
+{ "kind": "share", "shareToken": "<token>", "reason": "offensive", "note": "" }   // reason and note as in Report
+```
+
+Rules:
+- The link is `https://<host>/s#<token>`. The token is in the fragment, which browsers never send, and it travels to the API only in request bodies, never in a URL path or query, because proxies and request logs keep URLs. The app takes the token from the fragment of the link it was opened with (Android App Link, iOS Universal Link, or pasted), or on Android from the string extra `shareToken` when the landing page opened it, and calls `POST /shares/open`, then `POST /shares/accept` when the user confirms. The token is opaque to the app.
+- A token that is not genuine answers 404 without reaching anyone's data. A link that expired (30 days), was revoked by its owner or by a report, whose recipe was deleted, whose owner's account is suspended or being deleted, or that already has 10 distinct recipients answers 410 `share_gone` (a recipient who already accepted still gets their copy).
+- Accept is keyed by recipient: the copy has a fixed id derived from the link and the recipient, so repeating the accept returns the existing copy unchanged, including the recipient's own edits since. If the recipient deleted the copy, the next accept creates it again.
+- The copy has `sourceType: "shared"`, `sourceUrl: null`, new picture ids, and the text with control and bidirectional characters removed (empty ingredients, steps and tags dropped). If no title is left after that, the accept answers 422 `share_unreadable`.
+- The copy counts against the recipient's limits: recipe count (409 `recipe_limit`), recipe text (413 `recipe_storage_cap`) and picture storage (413 `storage_cap`). When it does not fit, nothing is copied; the app tells the user to free space and try again.
+- Pictures: when a link is created, every picture of the recipe that has not been checked yet is checked once by a vision model (safe or not); a picture with new bytes is checked again. Only pictures that passed are ever shared, so a picture added to the recipe after the link was made is not part of the copy until a new link is made. A recipe without pictures needs no AI consent to be shared.
+- A report of a shared recipe revokes the link at once. Reporting the same link again answers 204 and changes nothing.
+- The response of `POST /recipes/:id/shares` is the only time the app sees the token; the owner keeps `shareId` to revoke the link. There is no list of an owner's links in this milestone.
+- A link keeps working until it expires even if the owner's subscription lapses meanwhile: it was made while subscribed. Only making a new link needs the subscription.
+- Picture checks are limited to 30 model calls per user and UTC day (each check of one picture is one call, also when the share then fails with 422 or 503); beyond that `POST /recipes/:id/shares` answers 429 `share_limit` until the next day.
+- Accept checks the recipient's recipe count and recipe text first, so a recipient at one of these limits gets 409 or 413 without using up one of the link's ten recipient places.
+- Translations count toward the 20 MB of recipe text (`recipe_storage_cap`); a translation that would pass it ends as `invalid` and is refunded.
+- Not decided yet: suspended users can still create, open, accept and report links; this is revisited when suspension is built (Milestone M6).
+
+### PDF
+
+| Route | Request | Success | Errors |
+|-------|---------|---------|--------|
+| `GET /recipes/:id/pdf` | none | 200 `application/pdf` bytes, `Content-Disposition: attachment; filename="recipe.pdf"`, `Cache-Control: private, no-store` | 400 `invalid_id`; 404 (not this user's recipe, or deleted); 429 `pdf_limit` (20 PDFs, or 40 failed renders, per UTC day); 429 `rate_limited`; 503 `pdf_unavailable` (the rendering service failed; nothing is counted; the local environment always answers this) |
+
+- Free for every signed-in user (no subscription), 20 per user and UTC day; a failed render does not count against these 20 but against a separate 40 a day.
+- The PDF shows title, servings and times, the recipe's pictures, description, ingredients (with group headings), steps and tags, as plain text. The few fixed texts (headings, "servings", "min") are in the recipe's `language` when it is one of the app's ten languages, otherwise English.
+
+### App links and the landing page
+
+Served by the Worker, not under `/v1`:
+
+| Path | Content |
+|------|---------|
+| `GET /s` (link `/s#<token>`) | static page `backend/public/s/index.html`: says a recipe was shared and offers to open the app; shows nothing of the recipe. Headers: `Content-Security-Policy: default-src 'none'; script-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`. Its only script, `/share-landing.js`, reads the token from `location.hash` and on Android turns the button into an intent link (package `com.linux.recipes`, token in the string extra `shareToken`, falling back to Google Play) |
+| `GET /.well-known/assetlinks.json` | Android App Links statement for package `com.linux.recipes` with the fingerprints in the Worker variable `ANDROID_CERT_SHA256` (comma-separated, `AA:BB:...` form, 32 bytes each) |
+| `GET /.well-known/apple-app-site-association` | Universal Links for app id `<APPLE_TEAM_ID>.com.linux.recipes`, path `/s`, from the Worker variable `APPLE_TEAM_ID` (10 characters) |
+
+Both `.well-known` files are JSON (`application/json`), without redirects, as the Android and Apple documentation require. They answer 404 while their variable is unset or malformed: the signing certificate fingerprint (Play App Signing) and the Apple team id are filled in by the provisioning step. App side: Android declares an `autoVerify` intent filter for `https://<host>` with `android:path="/s"` and reads the token from `intent.data` (the fragment) or the `shareToken` extra; iOS adds the associated domain `applinks:<host>` and reads the fragment of `NSUserActivity.webpageURL`. The app id is `com.linux.recipes` on both platforms. Fragments in app links: both platforms' matching rules can match on the fragment (`"#"` in Apple's `components` and in Android's dynamic App Link rules), so the system sees it; neither page states in words that the delivered URL keeps it, so this still has to be checked on a device (UNVERIFIED).
 
 ## Module boundaries
 

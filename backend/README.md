@@ -38,6 +38,14 @@ A free account has one import; a `no_recipe`, `guard_block` or `failed` outcome 
 uses it. Sign in with another `idToken` subject (`__TEST_IDP__|someone-else|...`) for a fresh account.
 URL import: `-d '{"kind":"url","url":"https://example.org/"}'`. Photo import: `-H 'content-type: image/jpeg' --data-binary @photo.jpg`.
 
+## Translations, shares and PDF locally
+
+The same stand-in translates by returning the source with the language name in front (`[German] Kartoffelsalat`), and
+passes every picture at share time except one whose bytes contain `__UNSAFE_PICTURE__` (that share answers 422).
+Translations and share links need the local subscription switch below. `env.local` has no Browser Run binding, so
+`GET /v1/recipes/:id/pdf` answers 503 `pdf_unavailable` locally; the App Links files answer 404 until
+`ANDROID_CERT_SHA256` and `APPLE_TEAM_ID` are set.
+
 ## Try the subscription locally
 
 `env.local` has no RevenueCat key, so the local entry answers RevenueCat's part itself (`src/testing/local-billing.ts`):
