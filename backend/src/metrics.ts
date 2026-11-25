@@ -13,7 +13,11 @@ export type UserEvent =
 	| { event: "entitlement_refresh"; trigger: string; outcome: string }
 	// share: created | revoked | reported | accepted | accept_existing | gone | ...; pdf: rendered | limited | unavailable;
 	// screen: safe | not_safe | unavailable. Codes only.
-	| { event: "share" | "pdf" | "screen"; outcome: string };
+	| { event: "share" | "pdf" | "screen"; outcome: string }
+	// account deletion (plan 4.7): started | erased; written before the erasure, a tombstone writes nothing.
+	| { event: "account_deletion"; outcome: string }
+	// admin (plan 4.12): suspend | unsuspend, with the reason code; the operator is recorded only in the object's audit table.
+	| { event: "admin_action"; action: string; reason: string };
 
 /** No content, no URLs, no user text: only the event, fixed codes and a duration. */
 export function userEvent(env: Env, metricsId: string, e: UserEvent): void {
@@ -28,7 +32,9 @@ export function userEvent(env: Env, metricsId: string, e: UserEvent): void {
 						? [e.event, e.kind, e.reason]
 						: e.event === "entitlement_refresh"
 							? [e.event, e.trigger, e.outcome]
-							: e.event === "share" || e.event === "pdf" || e.event === "screen"
+							: e.event === "admin_action"
+								? [e.event, e.action, e.reason]
+							: e.event === "share" || e.event === "pdf" || e.event === "screen" || e.event === "account_deletion"
 								? [e.event, e.outcome]
 								: [e.event];
 	env.METRICS.writeDataPoint({ indexes: [metricsId], blobs, doubles: [e.event === "import_outcome" ? e.durationMs : 1] });
@@ -42,13 +48,21 @@ export type SystemEvent =
 	| { event: "billing_webhook"; type: string }
 	// The reported account only as an encrypted reference (share.ts reportReference), never its user id (plan 4.10).
 	| { event: "share_report"; reason: string; reference: string }
-	| { event: "internal_error"; reason: string };
+	| { event: "internal_error"; reason: string }
+	// A scheduled re-read (daily or stale) found a different active state: a webhook that should have set it was missed.
+	| { event: "entitlement_mismatch"; trigger: string }
+	// A third-party deletion step (revenuecat, apple) still failing after 7 days; the erasure ran without it.
+	| { event: "account_deletion"; outcome: "third_party_abandoned"; step: string };
 
 export function systemEvent(env: Env, e: SystemEvent): void {
 	if (e.event === "share_report") {
 		env.METRICS.writeDataPoint({ blobs: [e.event, e.reason, e.reference], doubles: [1] });
 		return;
 	}
-	const detail = e.event === "auth_failure" || e.event === "internal_error" ? e.reason : e.event === "rate_limited" ? e.route : e.event === "billing_webhook" ? e.type : e.provider;
+	if (e.event === "account_deletion") {
+		env.METRICS.writeDataPoint({ blobs: [e.event, e.outcome, e.step], doubles: [1] });
+		return;
+	}
+	const detail = e.event === "auth_failure" || e.event === "internal_error" ? e.reason : e.event === "rate_limited" ? e.route : e.event === "billing_webhook" ? e.type : e.event === "entitlement_mismatch" ? e.trigger : e.provider;
 	env.METRICS.writeDataPoint({ blobs: [e.event, detail], doubles: [1] });
 }

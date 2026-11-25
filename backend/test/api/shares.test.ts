@@ -219,11 +219,13 @@ describe("GET /shares", () => {
 		expect((await listOf(a)).shares.map((x) => x.shareId)).toEqual([kept.shareId]);
 	});
 
-	it("a suspended owner's list is empty; an account being deleted gets 401", async () => {
+	it("a suspended owner is refused with 403 account_suspended; an account being deleted gets 401", async () => {
 		const a = await owner();
 		await created(a, await recipe(a));
 		await setMeta(a, "state", "suspended");
-		expect((await listOf(a)).shares).toEqual([]);
+		// Since M6 every route outside the exempt list answers 403 for a suspended account; the list is not exempt.
+		const suspended = await call("/shares", { token: a.token });
+		expect([suspended.status, await code(suspended)]).toEqual([403, "account_suspended"]);
 		await setMeta(a, "state", "deleting");
 		expect((await call("/shares", { token: a.token })).status).toBe(401);
 	});

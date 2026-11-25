@@ -53,6 +53,10 @@ export const MIGRATIONS: Migration[] = [
 			"CREATE TABLE share_accepts (share_id TEXT NOT NULL, recipient_hash TEXT NOT NULL, accepted_at INTEGER NOT NULL, PRIMARY KEY (share_id, recipient_hash))",
 		);
 	},
+	// v6 (M6): admin actions on this account (plan 4.12); actor is the operator's Access email, never the user's
+	(sql) => {
+		sql.exec("CREATE TABLE audit (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, reason TEXT)");
+	},
 ];
 
 // GLOB, not LIKE: "_" is a wildcard in LIKE. _cf_* tables are internal to the runtime.
@@ -61,6 +65,17 @@ const USER_TABLES = "SELECT name FROM sqlite_master WHERE type = 'table' AND nam
 export function rowCounts(sql: SqlStorage): Map<string, number> {
 	const names = sql.exec<{ name: string }>(USER_TABLES).toArray();
 	return new Map(names.map(({ name }) => [name, sql.exec<{ n: number }>(`SELECT count(*) AS n FROM "${name}"`).one().n]));
+}
+
+/** Drops every user table. Only the erasure step (user-do.ts erase) calls it, inside its transaction. */
+export function dropUserTables(sql: SqlStorage): void {
+	for (const { name } of sql.exec<{ name: string }>(USER_TABLES).toArray()) sql.exec(`DROP TABLE "${name}"`);
+}
+
+/** The account state in meta, or null when there is no meta table or no state (no account). */
+export function accountState(sql: SqlStorage): string | null {
+	if (sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'").toArray().length === 0) return null;
+	return sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'state'").toArray()[0]?.value ?? null;
 }
 
 export function schemaVersion(sql: SqlStorage): number {

@@ -49,6 +49,8 @@ export async function runDueTasks(storage: DurableObjectStorage, handlers: Recor
 			const handler = handlers[task.kind];
 			if (!handler) throw new Error(`no handler for task kind ${task.kind}`);
 			await handler(task.payload, now, task.attempts);
+			// Erasure without a tombstone (deleteAll) removed every table and the alarm: nothing is left to run or re-arm.
+			if (storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks'").toArray().length === 0) return failed;
 			// A handler may have rescheduled its own task to a later time; only remove it if it is still the run that was due.
 			storage.sql.exec("DELETE FROM tasks WHERE id = ? AND due_at = ?", task.id, task.due_at);
 		} catch (e) {

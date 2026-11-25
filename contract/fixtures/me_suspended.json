@@ -1,0 +1,10 @@
+{
+  "userId": "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE",
+  "state": "suspended",
+  "suspension": { "reason": "abusive_content" },
+  "entitlement": { "active": false, "expiresAt": null },
+  "quota": { "freeImportUsed": true, "monthUsed": 0, "monthLimit": 30 },
+  "storage": { "usedBytes": 0, "capBytes": 52428800 },
+  "consentVersion": 1,
+  "openJobId": null
+}

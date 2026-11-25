@@ -1,4 +1,4 @@
-// Repository guards (plan M0 step 7; AC3, AC23, AC24, AC37, AC39).
+// Repository guards (plan M0 step 7; AC3, AC23, AC24, AC37, AC39, AC40, AC44).
 // Run from the repo root: `bun run tools/guards.ts`. Bun built-ins only.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -300,6 +300,107 @@ export function checkStoreReadiness(root: string): Result {
     : { name, status: "pass", lines: [`${items.length} item(s) ticked with evidence links`] };
 }
 
+// ---------- data inventory (AC44) ----------
+const INVENTORY = "docs/data-inventory.md";
+export const PROCESSORS = ["Cloudflare", "RevenueCat", "Apple", "Google"];
+const LEGAL_PLACEHOLDER = "OWNER-LEGAL-PLACEHOLDER";
+// Retention numbers the privacy policy must name, from the inventory's retention summary (minutes, days, months).
+const POLICY_PERIODS = ["5", "7", "30", "90", "3", "12"];
+
+const uniq = (xs: string[]) => [...new Set(xs)].sort();
+
+/** Tables created by the migrations. */
+export function schemaTables(migrations: string): string[] {
+  return uniq([...migrations.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?(\w+)/g)].map((m) => m[1]));
+}
+
+/** Meta keys the user object reads or writes, with `deletion_done_<step>` expanded from DELETION_STEPS. */
+export function metaKeys(userDo: string, extra = ""): string[] {
+  const text = userDo + extra;
+  const keys = [
+    ...[...text.matchAll(/(?:setMeta|meta|appleMap|setAppleMap)(?:<[^>]*>)?\("(\w+)"/g)].map((m) => m[1]),
+    ...[...text.matchAll(/key = '(\w+)'/g)].map((m) => m[1]),
+    ...[...text.matchAll(/LOCAL_ENTITLEMENT_KEY = "(\w+)"/g)].map((m) => m[1]),
+  ];
+  const steps = /DELETION_STEPS = \[([^\]]*)\]/.exec(userDo)?.[1] ?? "";
+  for (const m of steps.matchAll(/"(\w+)"/g)) keys.push(`deletion_done_${m[1]}`);
+  return uniq(keys);
+}
+
+/** Every event name of the metric unions in metrics.ts. */
+export function metricEvents(metrics: string): string[] {
+  return uniq([...metrics.matchAll(/event: ((?:"\w+"(?: \| )?)+)/g)].flatMap((m) => [...m[1].matchAll(/"(\w+)"/g)].map((x) => x[1])));
+}
+
+/** Retention constants (`*_TTL_MS`, `*_DAYS`) defined in backend/src. */
+export function retentionConstants(sources: string[]): string[] {
+  return uniq(sources.flatMap((s) => [...s.matchAll(/const (\w+_(?:TTL_MS|DAYS)) =/g)].map((m) => m[1])));
+}
+
+export function checkDataInventory(root: string): Result[] {
+  const name = "data-inventory";
+  // A tree without the backend (test fixtures) has nothing to compare.
+  if (!existsSync(join(root, "backend/src/storage/migrations.ts"))) return [{ name, status: "pass", lines: ["no backend schema in this tree"] }];
+  if (!existsSync(join(root, INVENTORY))) return [{ name, status: "fail", lines: [`${INVENTORY} is missing`] }];
+  const inventory = read(root, INVENTORY);
+  const named = (x: string) => inventory.includes(`\`${x}\``);
+  const testing = files(root, "backend/src/testing", [".ts"]).map((f) => read(root, f)).join("\n");
+  const sources = files(root, "backend/src", [".ts"]).map((f) => read(root, f));
+  const wanted: [string, string[]][] = [
+    ["table", schemaTables(read(root, "backend/src/storage/migrations.ts"))],
+    ["meta key", metaKeys(read(root, "backend/src/user-do.ts"), testing)],
+    ["metric event", metricEvents(read(root, "backend/src/metrics.ts"))],
+    ["retention constant", retentionConstants(sources)],
+  ];
+  const missing = wanted.flatMap(([kind, xs]) => xs.filter((x) => !named(x)).map((x) => `${INVENTORY}: ${kind} \`${x}\` is not listed`));
+  missing.push(...PROCESSORS.filter((p) => !inventory.includes(p)).map((p) => `${INVENTORY}: processor ${p} is not named`));
+  const counts = wanted.map(([kind, xs]) => `${xs.length} ${kind}s`).join(", ");
+  const inventoryResult: Result = missing.length
+    ? { name, status: "fail", lines: missing }
+    : { name, status: "pass", lines: [`${counts} and ${PROCESSORS.length} processors are all listed`] };
+
+  const policyName = "privacy-policy";
+  const policies = ["backend/legal/privacy.en.html", "backend/legal/privacy.de.html"].filter((f) => existsSync(join(root, f)));
+  if (policies.length < 2) return [inventoryResult, { name: policyName, status: "fail", lines: ["backend/legal/privacy.en.html and privacy.de.html must exist"] }];
+  if (policies.some((f) => read(root, f).includes(LEGAL_PLACEHOLDER))) {
+    return [
+      inventoryResult,
+      {
+        name: policyName,
+        status: "not-enforced",
+        lines: ["the privacy policy is still the owner placeholder; NOT ENFORCED until the owner pastes the generator text (production deploy is blocked by backend/scripts/check-legal.ts)"],
+      },
+    ];
+  }
+  const policyErrors = policies.flatMap((f) => {
+    const text = read(root, f);
+    return [
+      ...PROCESSORS.filter((p) => !text.includes(p)).map((p) => `${f}: processor ${p} is not named`),
+      ...POLICY_PERIODS.filter((n) => !new RegExp(`\\b${n}\\b`).test(text)).map((n) => `${f}: retention period ${n} (see ${INVENTORY}) is not named`),
+    ];
+  });
+  return [
+    inventoryResult,
+    policyErrors.length ? { name: policyName, status: "fail", lines: policyErrors } : { name: policyName, status: "pass", lines: ["both privacy policies name every processor and retention period"] },
+  ];
+}
+
+// ---------- restore runbook (AC40) ----------
+export const RESTORE_RULE = /never restore an object to a point (?:in time )?before its erasure/i;
+
+export function checkRestoreRunbook(root: string): Result {
+  const name = "restore-runbook";
+  const file = "docs/runbooks/restore.md";
+  if (!existsSync(join(root, file))) return pending(name, file, "M6");
+  const text = read(root, file);
+  if (!RESTORE_RULE.test(text)) return { name, status: "fail", lines: [`${file}: the rule "never restore an object to a point before its erasure" is missing`] };
+  const record = /^## Drill record\s*$([\s\S]*?)(?=^## |(?![\s\S]))/m.exec(text)?.[1] ?? "";
+  const filled = record.split("\n").some((l) => /^\s*\|.*\d{4}-\d{2}-\d{2}/.test(l));
+  return filled
+    ? { name, status: "pass", lines: [`${file}: rule present and a drill is recorded`] }
+    : { name, status: "not-enforced", lines: [`${file}: rule present; drill record empty, NOT ENFORCED until the owner runs the staging drill (needs the Cloudflare account)`] };
+}
+
 export function runAll(root: string): Result[] {
   return [
     checkGradients(root),
@@ -308,6 +409,8 @@ export function runAll(root: string): Result[] {
     ...checkClientLines(root),
     checkSecurityReview(root),
     checkStoreReadiness(root),
+    ...checkDataInventory(root),
+    checkRestoreRunbook(root),
   ];
 }
 

@@ -65,3 +65,26 @@ export const revenueCat =
 		}
 		return null;
 	};
+
+/** REST API v2 base; the customer delete needs a v2 secret key and the project id (docs/versions/backend.md, "RevenueCat"). */
+export const REVENUECAT_V2_BASE = "https://api.revenuecat.com/v2";
+
+/**
+ * Account deletion (plan 4.7): `DELETE /v2/projects/{project_id}/customers/{customer_id}`. True when RevenueCat accepted
+ * the deletion or does not know the customer (404 counts as done); false means try again later. Without a v2 key
+ * (env.local) there is nothing at RevenueCat to delete.
+ */
+export async function deleteCustomer(env: { REVENUECAT_V2_API_KEY?: string; REVENUECAT_PROJECT_ID: string }, userId: string): Promise<boolean> {
+	if (!env.REVENUECAT_V2_API_KEY) return true;
+	if (!env.REVENUECAT_PROJECT_ID) return false;
+	const url = `${REVENUECAT_V2_BASE}/projects/${encodeURIComponent(env.REVENUECAT_PROJECT_ID)}/customers/${encodeURIComponent(userId)}`;
+	try {
+		const res = await fetch(url, { method: "DELETE", headers: { authorization: `Bearer ${env.REVENUECAT_V2_API_KEY}` }, signal: AbortSignal.timeout(TIMEOUT_MS) });
+		await res.body?.cancel();
+		if (res.ok || res.status === 404) return true;
+		console.error(`revenuecat: customer delete answered ${res.status}`);
+	} catch (e) {
+		console.error(`revenuecat: customer delete failed: ${e instanceof Error ? e.name : "non-error value"}`);
+	}
+	return false;
+}
