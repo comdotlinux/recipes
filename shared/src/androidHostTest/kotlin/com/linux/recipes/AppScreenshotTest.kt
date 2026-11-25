@@ -4,7 +4,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.v2.runComposeUiTest
 import com.github.takahirom.roborazzi.captureRoboImage
 import androidx.compose.foundation.background
@@ -21,8 +23,10 @@ import com.linux.recipes.ui.FakeConsentRepository
 import com.linux.recipes.ui.FakeImportRepository
 import com.linux.recipes.ui.FakeRecipeRepository
 import com.linux.recipes.ui.importedDraft
+import com.linux.recipes.ui.testPlans
 import com.linux.recipes.ui.imports.AiNoticeContent
 import com.linux.recipes.ui.imports.ImportPaywallContent
+import com.linux.recipes.ui.paywall.PaywallContent
 import com.linux.recipes.ui.imports.ImportSheetContent
 import com.linux.recipes.ui.imports.ImportViewModel
 import com.linux.recipes.ui.imports.ReviewImportScreen
@@ -172,8 +176,16 @@ class AppScreenshotTest : UiTest() {
         ReviewImportScreen(remember { RecipeEditViewModel(recipes(), null, "en", importedDraft) }, FakeImportRepository(), "job", {}, {})
     }
 
+    /** Without a store (no billing provided): the plans are replaced by the "store not available" note. */
     @Test
     fun importPaywall() = both("import_paywall") { OnSheet { ImportPaywallContent({}, {}) } }
+
+    @Test
+    fun paywall() = both("paywall") { OnSheet { paywallWithPlans() } }
+
+    @Composable
+    private fun paywallWithPlans() =
+        PaywallContent(testPlans, "monthly", {}, working = false, message = null, {}, {}, onTypeIn = {}, onClose = {})
 
     /** 200 % font on the import screens. */
     @Test
@@ -186,5 +198,7 @@ class AppScreenshotTest : UiTest() {
         shot("large_font_import_sheet", dark = false, before = {}) {
             OnSheet { ImportSheetContent("", {}, firstFree = true, {}, {}, {}) }
         }
+        shot("large_font_paywall", dark = false, before = {}) { OnSheet { paywallWithPlans() } }
+        shot("large_font_paywall_plans", dark = false, before = { onNodeWithText("Subscribe").performScrollTo() }) { OnSheet { paywallWithPlans() } }
     }
 }

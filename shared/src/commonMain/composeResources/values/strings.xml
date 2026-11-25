@@ -195,4 +195,29 @@
     <string name="consent_body_control">Nothing is saved to your recipes until you save the draft. You can withdraw this consent in Settings.</string>
     <string name="consent_accept">Accept</string>
     <string name="consent_not_now">Not now</string>
+
+    <!-- Recipes Pro (milestone M3): the paywall and its row in Settings. Prices come from the store, never from here. -->
+    <string name="pro_title">Recipes Pro</string>
+    <string name="pro_feature_imports">30 AI imports a month, from links and photos</string>
+    <string name="pro_feature_storage">500 MB for your recipe pictures</string>
+    <string name="pro_feature_sharing">Share recipes with a link</string>
+    <string name="pro_plan_month">Monthly</string>
+    <string name="pro_plan_month_price">%1$s a month</string>
+    <string name="pro_plan_year">Yearly</string>
+    <string name="pro_plan_year_price">%1$s a year</string>
+    <string name="pro_renewal">The subscription renews automatically at the same price until you cancel it. You can cancel any time in the subscription settings of Google Play or the App Store. Recipes Pro then stays active until the end of the period you have paid for.</string>
+    <string name="pro_subscribe">Subscribe</string>
+    <string name="pro_restore">Restore purchases</string>
+    <string name="pro_loading">Loading the plans…</string>
+    <string name="pro_store_unavailable">The store is not available right now. Please try again later.</string>
+    <string name="pro_working">Waiting for the store…</string>
+    <string name="pro_cancelled">The purchase was cancelled. Nothing was charged.</string>
+    <string name="pro_pending">Your payment is not confirmed yet. Recipes Pro starts as soon as it is.</string>
+    <string name="pro_failed">The purchase did not go through. Please try again.</string>
+    <string name="pro_restore_none">No subscription was found to restore.</string>
+    <string name="pro_restored">Recipes Pro is active.</string>
+    <string name="settings_pro_free">Free plan</string>
+    <string name="settings_pro_active">Active until %1$s</string>
+    <string name="settings_pro_upgrade">See Recipes Pro</string>
+    <string name="settings_pro_manage">Manage subscription</string>
 </resources>

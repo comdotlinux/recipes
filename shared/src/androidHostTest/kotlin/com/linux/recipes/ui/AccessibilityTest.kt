@@ -22,6 +22,7 @@ import com.linux.recipes.data.ImportJobState
 import com.linux.recipes.data.ImportOutcome
 import com.linux.recipes.ui.imports.AiNoticeContent
 import com.linux.recipes.ui.imports.ImportPaywallContent
+import com.linux.recipes.ui.paywall.PaywallContent
 import com.linux.recipes.ui.imports.ImportSheetContent
 import com.linux.recipes.ui.imports.ImportViewModel
 import com.linux.recipes.ui.imports.ReportContent
@@ -167,6 +168,21 @@ class AccessibilityTest : UiTest() {
 
     @Test
     fun paywallClickablesAreLabelled() = everyClickableIsLabelled { ImportPaywallContent({}, {}) }
+
+    // ---------- M3: Recipes Pro ----------
+
+    @Test
+    fun paywallWithPlansClickablesAreLabelled() = everyClickableIsLabelled {
+        PaywallContent(testPlans, "monthly", {}, working = false, message = null, {}, {}, onTypeIn = {}, onClose = {})
+    }
+
+    @Test
+    fun settingsWithRecipesProClickablesAreLabelled() = everyClickableIsLabelled {
+        SettingsScreen(
+            remember { SettingsViewModel(FakeSessionRepository(signedIn = true), FakeConsentRepository(), FakeImportRepository(), FakeBillingRepository()) },
+            {},
+        )
+    }
 
     @Test
     fun reportClickablesAreLabelled() = everyClickableIsLabelled { ReportContent({ _, _ -> }, {}) }
