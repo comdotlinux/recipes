@@ -104,17 +104,23 @@ class ShareRepositoryTest {
 
     @Test
     fun refreshTakesTheServerListAndKeepsTheUrlsMadeHere() = runTest {
+        val list = Api.apiJson.decodeFromString(ShareList.serializer(), fixture("shares_list.json")).shares
+        val listed = list.first()
         server.handler = { json(fixture("share_created.json"), HttpStatusCode.Created) }
         val repo = repository()
-        repo.create(ID_A)
-        server.handler = { json(fixture("shares_list.json")) }
+        // The link of the list was made on this device; a second one, made elsewhere, has no address here.
+        repo.create(listed.recipeId)
+        val elsewhere = listed.copy(shareId = "aa11bb22cc33dd44ee55ff6677889900", createdAt = "2026-11-20T08:30:00Z", recipients = 0)
+        val listJson = Api.apiJson.encodeToString(ShareList.serializer(), ShareList(list + elsewhere))
+        server.handler = { json(listJson) }
         assertTrue(repo.refresh())
         assertEquals("$BASE/v1/shares", server.requests.last().url.toString())
         assertEquals(HttpMethod.Get, server.requests.last().method)
+        assertEquals(created.shareId, listed.shareId)
         assertEquals(
             listOf(
-                ShareLink(created.shareId, ID_A, created.url, "2026-12-25T10:00:00Z", recipients = 2),
-                ShareLink("aa11bb22cc33dd44ee55ff6677889900", ID_A, null, "2026-12-20T08:30:00Z", recipients = 0),
+                ShareLink(listed.shareId, listed.recipeId, created.url, listed.expiresAt, listed.recipients),
+                ShareLink(elsewhere.shareId, elsewhere.recipeId, null, elsewhere.expiresAt, 0),
             ),
             repo.links.value,
         )
@@ -197,13 +203,15 @@ class ShareRepositoryTest {
     @Test
     fun acceptReturnsTheCopyAndSyncs() = runTest {
         server.handler = { json(fixture("share_accept_response.json")) }
-        val result = repository().accept(TOKEN)
+        val token = Api.apiJson.decodeFromString(ShareTokenBody.serializer(), fixture("share_token_body.json")).shareToken
+        assertTrue(ShareLinks.isToken(token))
+        val result = repository().accept(token)
         assertIs<ShareAccept.Accepted>(result)
         assertEquals("5b8e1f0a-2c3d-4e5f-a6b7-c8d9e0f1a2b3", result.recipe.id)
         assertEquals(1, syncs)
         val sent = server.requests.single()
         assertEquals("$BASE/v1/shares/accept", sent.url.toString())
-        assertEquals(jsonOf(fixture("share_token_body.json").replace(FIXTURE_TOKEN, TOKEN)), jsonOf(sent.bodyText()))
+        assertEquals(jsonOf(fixture("share_token_body.json")), jsonOf(sent.bodyText()))
     }
 
     @Test
@@ -289,6 +297,11 @@ class ShareRepositoryTest {
     @Test
     fun parserAcceptsOnlyTheExactLink() {
         assertEquals(TOKEN, ShareLinks.tokenFromUrl("https://$HOST/s#$TOKEN", HOST))
+        // The server's own link and its host, as the fixtures carry them.
+        assertEquals(created.token, ShareLinks.tokenFromUrl(created.url, HOST))
+        assertEquals(HOST, ShareLinks.hostOf(created.url.substringBefore("/s#")))
+        val reportToken = Api.apiJson.decodeFromString(ShareReport.serializer(), fixture("report_share.json")).shareToken
+        assertTrue(ShareLinks.isToken(reportToken))
         assertEquals(TOKEN, ShareLinks.tokenFromUrl("HTTPS://Recipe.Munich-Tech.DE/s#$TOKEN", HOST))
         val hostile = listOf(
             null,
@@ -341,6 +354,5 @@ class ShareRepositoryTest {
         const val HOST = "recipe.munich-tech.de"
         /** 107 base64url characters, as the server issues them. */
         val TOKEN = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_".repeat(3).take(107)
-        const val FIXTURE_TOKEN = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdEfGhIjKlMnOpQrStUvWxYz012"
     }
 }
