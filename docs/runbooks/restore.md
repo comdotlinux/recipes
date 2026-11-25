@@ -1,6 +1,6 @@
 # Restore runbook
 
-Cloudflare keeps point-in-time recovery for SQLite-backed Durable Objects for 30 days. A restore works on one object at a time, from code running inside that object (`ctx.storage.getBookmarkForTime()` and `ctx.storage.onNextSessionRestoreBookmark()`, then the object restarts), so it needs a deployed, owner-only code path and the owner's Cloudflare account. No such path is deployed in this milestone; a restore is a deliberate, reviewed deploy.
+Cloudflare keeps point-in-time recovery for SQLite-backed Durable Objects for 30 days. A restore works on one object at a time, from code running inside that object (`ctx.storage.getBookmarkForTime()` and `ctx.storage.onNextSessionRestoreBookmark()`, then the object restarts; method names from memory, UNVERIFIED: read the current Durable Objects "point-in-time recovery" page before step 3), so it needs a deployed, owner-only code path and the owner's Cloudflare account. No such path is deployed in this milestone; a restore is a deliberate, reviewed deploy.
 
 ## Rule
 

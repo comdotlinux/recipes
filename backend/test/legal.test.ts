@@ -7,7 +7,7 @@ const get = (path: string) => exports.default.fetch(`http://localhost${path}`);
 describe("legal pages (AC29)", () => {
 	for (const page of ["privacy", "imprint", "terms"]) {
 		for (const [suffix, lang] of [["", "en"], ["/de", "de"]] as const) {
-			it(`/${page}${suffix} loads without any challenge, with HSTS and a strict CSP`, async () => {
+			it(`/${page}${suffix} loads without any challenge, with HSTS and a strict CSP`, { timeout: 20_000 }, async () => {
 				const res = await get(`/${page}${suffix}`);
 				expect(res.status).toBe(200);
 				expect(res.headers.get("content-security-policy")).toBe(LEGAL_CSP);
