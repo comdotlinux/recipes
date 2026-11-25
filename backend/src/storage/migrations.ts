@@ -63,6 +63,17 @@ export function rowCounts(sql: SqlStorage): Map<string, number> {
 	return new Map(names.map(({ name }) => [name, sql.exec<{ n: number }>(`SELECT count(*) AS n FROM "${name}"`).one().n]));
 }
 
+/** Drops every user table. Only the erasure step (user-do.ts erase) calls it, inside its transaction. */
+export function dropUserTables(sql: SqlStorage): void {
+	for (const { name } of sql.exec<{ name: string }>(USER_TABLES).toArray()) sql.exec(`DROP TABLE "${name}"`);
+}
+
+/** The account state in meta, or null when there is no meta table or no state (no account). */
+export function accountState(sql: SqlStorage): string | null {
+	if (sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'").toArray().length === 0) return null;
+	return sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'state'").toArray()[0]?.value ?? null;
+}
+
 export function schemaVersion(sql: SqlStorage): number {
 	if (sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'").toArray().length === 0) return 0;
 	const row = sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'schema_version'").toArray()[0];

@@ -13,7 +13,9 @@ export type UserEvent =
 	| { event: "entitlement_refresh"; trigger: string; outcome: string }
 	// share: created | revoked | reported | accepted | accept_existing | gone | ...; pdf: rendered | limited | unavailable;
 	// screen: safe | not_safe | unavailable. Codes only.
-	| { event: "share" | "pdf" | "screen"; outcome: string };
+	| { event: "share" | "pdf" | "screen"; outcome: string }
+	// account deletion (plan 4.7): started | erased; written before the erasure, a tombstone writes nothing.
+	| { event: "account_deletion"; outcome: string };
 
 /** No content, no URLs, no user text: only the event, fixed codes and a duration. */
 export function userEvent(env: Env, metricsId: string, e: UserEvent): void {
@@ -28,7 +30,7 @@ export function userEvent(env: Env, metricsId: string, e: UserEvent): void {
 						? [e.event, e.kind, e.reason]
 						: e.event === "entitlement_refresh"
 							? [e.event, e.trigger, e.outcome]
-							: e.event === "share" || e.event === "pdf" || e.event === "screen"
+							: e.event === "share" || e.event === "pdf" || e.event === "screen" || e.event === "account_deletion"
 								? [e.event, e.outcome]
 								: [e.event];
 	env.METRICS.writeDataPoint({ indexes: [metricsId], blobs, doubles: [e.event === "import_outcome" ? e.durationMs : 1] });

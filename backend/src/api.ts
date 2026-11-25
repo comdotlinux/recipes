@@ -87,6 +87,7 @@ type UserObject = Pick<
 	| "report"
 	| "refreshFromClient"
 	| "entitlementChanged"
+	| "deleteAccount"
 >;
 
 const MAX_WEBHOOK_BODY = 64 * 1024;
@@ -248,7 +249,10 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 		if (!subject) return rejected(401, "invalid_token");
 		const userId = await deriveUserId(parsed.provider, subject.sub, c.env);
 		const { token, secretHash } = await newSessionToken(userId, c.env);
-		const result = await userObject(c.env, userId).createSession({ nonceId: nonce.id, nonceExpiresAt: nonce.expiresAt, secretHash, platform: parsed.provider });
+		// The code is exchanged later for the refresh token that account deletion revokes (plan 4.7).
+		const clientId = (subject as { aud?: string }).aud;
+		const apple = parsed.provider === "apple" && parsed.appleAuthCode && clientId ? { code: parsed.appleAuthCode, clientId } : undefined;
+		const result = await userObject(c.env, userId).createSession({ nonceId: nonce.id, nonceExpiresAt: nonce.expiresAt, secretHash, platform: parsed.provider, apple });
 		if (result.status !== 200) {
 			systemEvent(c.env, { event: "auth_failure", reason: (result.body as { error: { code: string } }).error.code });
 			return reply(c, result);
@@ -259,6 +263,12 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 	app.delete(
 		"/v1/session",
 		authed((o, a) => o.deleteSession(a.secretHash)),
+	);
+
+	// docs/api.md "Milestone M6": starts erasure; every other call answers 401 from now on.
+	app.delete(
+		"/v1/account",
+		authed((o, a) => o.deleteAccount(a.secretHash)),
 	);
 
 	app.get(

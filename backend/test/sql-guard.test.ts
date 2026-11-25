@@ -1,11 +1,12 @@
 import { expect, it } from "vitest";
 
 // SQL injection guard. Every statement passes its values as `?` bindings; the SQL text itself is fixed.
-// The two entries below are the only places where SQL text is assembled, and neither uses request data:
-// one picks between two fixed strings, the other quotes a table name read from sqlite_master.
+// The entries below are the only places where SQL text is assembled, and none uses request data:
+// one picks between two fixed strings, the others quote a table name read from sqlite_master.
 const ALLOWED_INTERPOLATIONS = [
 	'DO UPDATE SET due_at = ${earliest ? "min(due_at, excluded.due_at)" : "excluded.due_at"}',
 	'SELECT count(*) AS n FROM "${name}"',
+	'DROP TABLE "${name}"',
 ];
 // The only statement passed as a variable; it is a constant without interpolation.
 const ALLOWED_VARIABLES = ["USER_TABLES"];

@@ -98,7 +98,7 @@ export async function verifyIdToken(
 	nonce: string,
 	env: Env,
 	now: number,
-): Promise<{ sub: string } | null | "unavailable"> {
+): Promise<{ sub: string; aud: string } | null | "unavailable"> {
 	const config = PROVIDERS[provider];
 	const audiences = config
 		.audiences(env)
@@ -133,7 +133,9 @@ export async function verifyIdToken(
 		const { payload } = result;
 		if (typeof payload.sub !== "string" || payload.sub.length === 0) return null;
 		if (payload.nonce !== (await config.nonceClaim(nonce))) return null;
-		return { sub: payload.sub };
+		// The audience that matched is the client id (bundle id, Services ID or web client id) the token was issued to.
+		const aud = [payload.aud].flat().find((a): a is string => typeof a === "string" && audiences.includes(a));
+		return { sub: payload.sub, aud: aud! };
 	} catch {
 		// Any jose error (signature, alg, kid, iss, aud, exp, malformed token) means "not valid".
 		return null;

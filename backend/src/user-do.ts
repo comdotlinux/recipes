@@ -7,7 +7,7 @@ import { SCREENS_PER_DAY, SHARES_PER_DAY, SHARE_RECIPIENT_LIMIT, SHARE_TTL_MS, d
 import { sha256Hex } from "./auth/encoding";
 import { PDF_FAILURES_PER_DAY, PDF_PER_DAY, renderPdf } from "./pdf";
 import { pdfHtml } from "./pdf-template";
-import { migrate, rowCounts, schemaVersion } from "./storage/migrations";
+import { MIGRATIONS, accountState, dropUserTables, migrate, rowCounts, schemaVersion } from "./storage/migrations";
 import { armAlarm, runDueTasks, schedule } from "./storage/tasks";
 import { fetchPage } from "./ai/fetch-url";
 import { AI_NOTICE_VERSION, ConsentRequired, type ModelRunner } from "./ai/gateway";
@@ -15,7 +15,8 @@ import { type ImportOutcome, structureRecipe } from "./ai/structure";
 import { screenImage } from "./ai/screen-image";
 import { transcribePhoto } from "./ai/transcribe";
 import { type TranslateOutcome, type TranslationLanguage, translateRecipe } from "./ai/translate";
-import { type Entitlement, type EntitlementSource, NONE, endOf, revenueCat } from "./billing/revenuecat";
+import { type Entitlement, type EntitlementSource, NONE, deleteCustomer, endOf, revenueCat } from "./billing/revenuecat";
+import { exchangeAppleCode, revokeAppleToken } from "./auth/apple";
 
 export const DAY_MS = 86_400_000;
 export const SESSION_TTL_MS = 30 * DAY_MS;
@@ -44,6 +45,21 @@ export const RECHECK_MS = DAY_MS;
 export const CLIENT_REFRESH_MS = 5_000;
 /** A webhook-triggered refresh is retried with backoff (storage/tasks.ts) at most this many times. */
 export const REFRESH_TASK_TRIES = 10;
+/**
+ * How long a tombstone stays after erasure (plan 4.7, 4.9): 12 months, then the whole object is wiped. It holds only
+ * the account state, its own expiry, when the free import was used and the refund count, so a returning provider
+ * account gets no second free import. Nothing about recipes, pictures, sessions, the subscription or the provider.
+ */
+export const TOMBSTONE_TTL_MS = 365 * DAY_MS;
+/** Meta keys a tombstone keeps; everything else is erased. */
+export const TOMBSTONE_KEYS = ["state", "tombstone_until", "free_import_used_at", "free_import_refunds"] as const;
+/** An Apple authorization code is valid for 5 minutes; an older one is not exchanged any more. */
+export const APPLE_CODE_TTL_MS = 5 * 60 * 1000;
+/** External deletion steps, each retried until done (plan 4.7); the erasure runs once all are done. */
+export const DELETION_STEPS = ["revenuecat", "apple"] as const;
+
+/** An Sign in with Apple authorization code and the client id it was issued to (bundle id, or Services ID on the web). */
+export type AppleCode = { code: string; clientId: string; redirectUri?: string };
 
 /** Plan 4.6: active means now is before the end (grace period included); while RevenueCat is unreachable, 24 hours longer. */
 export function entitled(e: Entitlement, now: number, reachable: boolean): boolean {
@@ -96,11 +112,11 @@ export class UserDO extends DurableObject<Env> {
 		this.sql = ctx.storage.sql;
 		void ctx.blockConcurrencyWhile(async () => {
 			// An id that never had a session gets no tables: only createSession() makes the schema.
-			// When account erasure lands (plan 4.7): a tombstone keeps only meta and tasks, so check the erased state here
-			// before migrating, or the user tables would be recreated for an erased account.
 			if (rowCounts(this.sql).size === 0) return;
-			migrate(ctx.storage);
-			// Repair: a task row without a matching alarm (for example after a crash between both writes) gets its alarm back.
+			// A tombstone keeps only meta and tasks (plan 4.7); migrating it would recreate the user tables of an erased account.
+			if (accountState(this.sql) !== "tombstone") migrate(ctx.storage);
+			// Repair: a task row without a matching alarm (for example after a crash between both writes, or between the
+			// erasure and its alarm) gets its alarm back.
 			await armAlarm(ctx.storage);
 		});
 	}
@@ -129,10 +145,16 @@ export class UserDO extends DurableObject<Env> {
 		if (id) userEvent(this.env, id, e);
 	}
 
-	/** Valid session: extends it at most once per day. Deleting accounts accept no session (plan 4.7). */
-	private authenticate(secretHash: string, now: number): boolean {
+	/** An account that is in use: active or suspended. Deleting, erased and never-created objects are not. */
+	private live(): boolean {
 		if (schemaVersion(this.sql) === 0) return false;
-		if (this.meta("state") === "deleting") return false;
+		const state = this.meta("state");
+		return state === "active" || state === "suspended";
+	}
+
+	/** Valid session: extends it at most once per day. Deleting and erased accounts accept no session (plan 4.7). */
+	private authenticate(secretHash: string, now: number): boolean {
+		if (!this.live()) return false;
 		const row = this.sql.exec<{ expires_at: number }>("SELECT expires_at FROM sessions WHERE token_hash = ?", secretHash).toArray()[0];
 		if (!row) return false;
 		if (row.expires_at <= now) {
@@ -153,8 +175,8 @@ export class UserDO extends DurableObject<Env> {
 		// The await above lets other requests in; a DELETE /session in between must win.
 		if (write && !this.authenticate(secretHash, now)) return error(401, "unauthenticated", "session revoked");
 		const result = limited ? error(429, "rate_limited", "too many writes") : await op(now);
-		// Job polling is not counted (plan 4.10).
-		if (group === "jobs") return result;
+		// Job polling is not counted (plan 4.10); nor is anything once the account is being deleted or erased.
+		if (group === "jobs" || !this.live()) return result;
 		this.sql.exec(
 			"INSERT INTO daily_counters (day, key, count) VALUES (?, ?, 1) ON CONFLICT (day, key) DO UPDATE SET count = count + 1",
 			day(now),
@@ -210,18 +232,24 @@ export class UserDO extends DurableObject<Env> {
 
 	// ---- session ----
 
-	async createSession(a: { nonceId: string; nonceExpiresAt: number; secretHash: string; platform: string }): Promise<Result> {
+	async createSession(a: { nonceId: string; nonceExpiresAt: number; secretHash: string; platform: string; apple?: AppleCode }): Promise<Result> {
 		const now = Date.now();
+		if (accountState(this.sql) === "deleting") return error(409, "account_deleting", "account deletion is running");
 		migrate(this.ctx.storage);
-		if (this.meta("state") === "deleting") return error(409, "account_deleting", "account deletion is running");
 		const used = this.sql.exec("INSERT INTO used_nonces (nonce_id, expires_at) VALUES (?, ?) ON CONFLICT DO NOTHING", a.nonceId, a.nonceExpiresAt);
 		if (used.rowsWritten === 0) return error(401, "invalid_nonce", "nonce already used");
-		if (this.meta("state") === null) {
+		const state = this.meta("state");
+		if (state === null || state === "tombstone") {
+			// A new account, or one returning within 12 months of its erasure: the tombstone's free-import facts stay
+			// (no second free import, AC18), its wipe is cancelled, and the metrics id is new so old rows stay unlinkable.
+			this.sql.exec("DELETE FROM meta WHERE key = 'tombstone_until'");
+			this.sql.exec("DELETE FROM tasks WHERE kind = 'tombstone_expiry'");
 			this.setMeta("state", "active");
 			this.setMeta("metrics_id", crypto.randomUUID());
 			this.setMeta("created_at", String(now));
 			this.event({ event: "account_created" });
 		}
+		if (a.apple) await this.keepAppleCode(a.apple, now);
 		const expiresAt = now + SESSION_TTL_MS;
 		this.sql.exec("INSERT INTO sessions (token_hash, created_at, expires_at, platform) VALUES (?, ?, ?, ?)", a.secretHash, now, expiresAt, a.platform);
 		// At most MAX_SESSIONS per user: the oldest go, in the same synchronous step (no await in between).
@@ -640,6 +668,8 @@ export class UserDO extends DurableObject<Env> {
 
 	/** Alarm task: runs a job. A transient error is retried by the dispatcher; the third failure ends it as failed. */
 	async runJob(jobKey: string, now: number, attempts: number): Promise<void> {
+		// A job of an account that is being deleted never calls a model.
+		if (!this.live()) return;
 		const job = this.job(jobKey);
 		if (!job || !OPEN.includes(job.status)) return;
 		// Tries already used up (also by runs the runtime killed), timed out, or consent withdrawn: end it now.
@@ -1025,6 +1055,8 @@ export class UserDO extends DurableObject<Env> {
 		const userId = this.ctx.id.name;
 		this.setMeta("entitlement_tried_at", String(now));
 		const fresh = source && userId ? await source(userId, now) : null;
+		// Deletion may have started (or ended) while RevenueCat answered: a late answer changes nothing (AC28).
+		if (!this.live()) return null;
 		this.event({ event: "entitlement_refresh", trigger, outcome: fresh ? (fresh.active ? "active" : "inactive") : "unavailable" });
 		if (!fresh) {
 			this.setMeta("entitlement_failed_at", String(now));
@@ -1059,7 +1091,7 @@ export class UserDO extends DurableObject<Env> {
 			this.setMeta("entitlement_client_at", String(now));
 			const fresh = await this.refreshEntitlement(now, "client");
 			if (!fresh) {
-				await this.scheduleRefresh(Date.now());
+				if (this.live()) await this.scheduleRefresh(Date.now());
 				return error(503, "billing_unavailable", "the subscription service could not be reached; retried in the background");
 			}
 			return { status: 200, body: this.billingView(entitled(fresh, now, true), now) };
@@ -1075,21 +1107,139 @@ export class UserDO extends DurableObject<Env> {
 	 * deleting account is left alone; both answer false. Replays and out-of-order events only cause another refresh.
 	 */
 	async entitlementChanged(): Promise<boolean> {
-		if (schemaVersion(this.sql) === 0) return false;
-		const state = this.meta("state");
-		if (state === null || state === "deleting") return false;
+		// Only active and suspended accounts; a deleting account or a tombstone is left alone (AC6, AC28).
+		if (!this.live()) return false;
 		await this.scheduleRefresh(Date.now());
 		return true;
 	}
 
 	/** Alarm task: a refresh that fails is retried by the dispatcher with backoff, at most REFRESH_TASK_TRIES times. */
 	async refreshTask(now: number, attempts: number): Promise<void> {
-		if (this.meta("state") === "deleting") return;
+		if (!this.live()) return;
 		if (attempts >= REFRESH_TASK_TRIES) {
 			this.event({ event: "entitlement_refresh", trigger: "webhook", outcome: "gave_up" });
 			return;
 		}
 		if (!(await this.refreshEntitlement(now, "webhook"))) throw new Error("subscription service unavailable");
+	}
+
+	// ---- account deletion (plan 4.7, docs/api.md Milestone M6) ----
+
+	/** Keeps an Apple authorization code until it is exchanged for the refresh token that deletion revokes. */
+	private async keepAppleCode(apple: AppleCode, now: number): Promise<void> {
+		this.setMeta("apple_auth_code", JSON.stringify({ ...apple, at: now }));
+		await schedule(this.ctx.storage, { id: "apple_token", kind: "apple_token", dueAt: now });
+	}
+
+	/**
+	 * Exchanges a stored authorization code for a refresh token. True when nothing is left to do (exchanged, refused for
+	 * good, or older than 5 minutes, which leaves nothing to revoke); false when Apple or the key was unavailable.
+	 */
+	private async exchangeStoredAppleCode(now: number): Promise<boolean> {
+		const raw = this.meta("apple_auth_code");
+		if (raw === null) return true;
+		const { code, clientId, redirectUri, at } = JSON.parse(raw) as AppleCode & { at: number };
+		const token = now - at < APPLE_CODE_TTL_MS ? await exchangeAppleCode(this.env, clientId, code, now, redirectUri) : "invalid";
+		if (token === null) return false;
+		this.sql.exec("DELETE FROM meta WHERE key = 'apple_auth_code'");
+		if (token !== "invalid") this.setMeta("apple_refresh_token", JSON.stringify({ token, clientId }));
+		return true;
+	}
+
+	/** Alarm task after a sign-in with Apple; retried with backoff until the code is exchanged or has expired. */
+	async appleTokenTask(now: number): Promise<void> {
+		if (!(await this.exchangeStoredAppleCode(now))) throw new Error("Apple token exchange unavailable");
+	}
+
+	/** DELETE /account: the state changes first, so every other call answers 401 at once; the steps run as alarm tasks. */
+	deleteAccount(secretHash: string): Promise<Result> {
+		return this.run("account", secretHash, async (now) => {
+			await this.startDeletion(now);
+			return { status: 202, body: { state: "deleting" } };
+		});
+	}
+
+	/** One synchronous step: state, sessions, share links and pending work, then the deletion task. */
+	protected async startDeletion(now: number): Promise<void> {
+		this.event({ event: "account_deletion", outcome: "started" });
+		this.ctx.storage.transactionSync(() => {
+			this.setMeta("state", "deleting");
+			this.setMeta("deletion_started_at", String(now));
+			this.sql.exec("DELETE FROM sessions");
+			this.sql.exec("UPDATE shares SET revoked = 1");
+			// Open jobs, refreshes, expiry and a pending Apple exchange are dropped; the apple step does that exchange itself.
+			this.sql.exec("DELETE FROM tasks");
+			this.sql.exec("INSERT INTO tasks (id, kind, due_at, attempts, payload) VALUES ('deletion', 'deletion', ?, 0, NULL)", now);
+		});
+		await armAlarm(this.ctx.storage);
+	}
+
+	private async revokeApple(now: number): Promise<boolean> {
+		if (!(await this.exchangeStoredAppleCode(now))) return false;
+		const raw = this.meta("apple_refresh_token");
+		if (raw === null) return true;
+		const { token, clientId } = JSON.parse(raw) as { token: string; clientId: string };
+		return revokeAppleToken(this.env, clientId, token, now);
+	}
+
+	/**
+	 * Alarm task: every external step not done yet, then the erasure. While a step is not done it throws, so the task is
+	 * retried with backoff (at most an hour apart) until it is; done steps are not repeated.
+	 */
+	async runDeletion(now: number): Promise<void> {
+		if (accountState(this.sql) !== "deleting") return;
+		const userId = this.selfId();
+		if (!userId) throw new Error("object without a user id");
+		const steps: Record<(typeof DELETION_STEPS)[number], () => Promise<boolean>> = {
+			revenuecat: () => deleteCustomer(this.env, userId),
+			apple: () => this.revokeApple(now),
+		};
+		let pending = 0;
+		for (const step of DELETION_STEPS) {
+			if (this.meta(`deletion_done_${step}`) !== null) continue;
+			if (await steps[step]()) this.setMeta(`deletion_done_${step}`, String(now));
+			else pending++;
+		}
+		if (pending > 0) {
+			this.event({ event: "account_deletion", outcome: "step_retry" });
+			throw new Error(`${pending} deletion step(s) not done yet`);
+		}
+		this.event({ event: "account_deletion", outcome: "erased" });
+		await this.erase(now);
+	}
+
+	/**
+	 * The only wipe of this object (plan 4.7). Allowed while the account is being deleted, or once its tombstone expired;
+	 * anything else throws and writes a metric. When a tombstone is needed (the free import was used or a refund was
+	 * counted), one transactionSync() drops every table, re-creates meta and tasks and writes the tombstone with its wipe
+	 * task; spike S11 showed that to be all or nothing. Otherwise deleteAll() removes everything, which is atomic on its own.
+	 */
+	async erase(now: number): Promise<void> {
+		const state = accountState(this.sql);
+		const expired = state === "tombstone" && now >= Number(this.meta("tombstone_until"));
+		if (state !== "deleting" && !expired) {
+			systemEvent(this.env, { event: "internal_error", reason: "erase_refused" });
+			throw new Error(`erase refused in state ${state ?? "none"}`);
+		}
+		const usedAt = this.meta("free_import_used_at");
+		const refunds = this.meta("free_import_refunds");
+		if (expired || (usedAt === null && Number(refunds ?? "0") === 0)) {
+			await this.ctx.storage.deleteAll();
+			// deleteAll() also clears the alarm at this compatibility date (spike S11); explicit anyway.
+			await this.ctx.storage.deleteAlarm();
+			return;
+		}
+		const until = now + TOMBSTONE_TTL_MS;
+		this.ctx.storage.transactionSync(() => {
+			dropUserTables(this.sql);
+			MIGRATIONS[0](this.sql);
+			this.setMeta("state", "tombstone");
+			this.setMeta("tombstone_until", String(until));
+			if (usedAt !== null) this.setMeta("free_import_used_at", usedAt);
+			if (refunds !== null) this.setMeta("free_import_refunds", refunds);
+			this.sql.exec("INSERT INTO tasks (id, kind, due_at, attempts, payload) VALUES ('tombstone_expiry', 'tombstone_expiry', ?, 0, NULL)", until);
+		});
+		await armAlarm(this.ctx.storage);
 	}
 
 	// ---- tasks ----
@@ -1142,6 +1292,9 @@ export class UserDO extends DurableObject<Env> {
 				job: (payload, now, attempts) => this.runJob(payload!, now, attempts),
 				job_timeout: (payload, now) => this.timeoutJob(payload!, now),
 				entitlement_refresh: (_payload, now, attempts) => this.refreshTask(now, attempts),
+				apple_token: (_payload, now) => this.appleTokenTask(now),
+				deletion: (_payload, now) => this.runDeletion(now),
+				tombstone_expiry: (_payload, now) => this.erase(now),
 			},
 			Date.now(),
 		);
