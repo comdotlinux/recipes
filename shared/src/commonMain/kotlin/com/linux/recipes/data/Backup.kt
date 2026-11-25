@@ -103,10 +103,11 @@ class Backup(
      * runs the writer on the chosen file (false when the user cancelled). The writer does not close the sink.
      */
     suspend fun export(save: suspend (write: suspend (Sink) -> Unit) -> Boolean): ExportResult {
-        if (!recipes.sync()) return ExportResult.Offline
+        val synced = recipes.sync()
         val all = recipes.recipes.value
         val missing = all.filter { r -> r.imageIds.any { pictureSize(it) == null } }
         if (missing.isNotEmpty()) return ExportResult.MissingPictures(missing.map { it.title })
+        if (!synced) return ExportResult.Offline
         val pictures = all.flatMap { r -> r.imageIds.distinct().map { id -> Triple(r.id, id, pictureSize(id) ?: 0L) } }
         val header = BackupHeader(FORMAT, VERSION, all.size, pictures.size, pictures.sumOf { it.third })
         var result: ExportResult = ExportResult.Done(all.size, pictures.size)
