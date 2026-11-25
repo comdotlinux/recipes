@@ -80,7 +80,16 @@ class FakeConsentRepository(given: Boolean = true) : ConsentRepository {
     var online = true
     var acceptCalls = 0
 
-    override suspend fun refresh(): Boolean = online
+    var refreshCalls = 0
+
+    /** A fake that starts as [ConsentState.Unknown] learns its state here, as the real one does from `GET /me`. */
+    var stateAfterRefresh: ConsentState? = null
+
+    override suspend fun refresh(): Boolean {
+        refreshCalls++
+        if (online) stateAfterRefresh?.let { state.value = it }
+        return online
+    }
 
     override suspend fun accept(): Boolean {
         acceptCalls++

@@ -128,6 +128,22 @@ class ImportViewModel(
     private fun submit(source: ImportSource) {
         sheetOpen = false
         problem = null
+        if (consent.state.value != ConsentState.Unknown) return decide(source)
+        // Not loaded yet: ask the server first, so a user who already agreed is not shown the notice again.
+        starting = true
+        viewModelScope.launch {
+            val loaded = consent.refresh()
+            starting = false
+            if (loaded) {
+                decide(source)
+            } else {
+                retrySource = source
+                problem = StartProblem.Offline
+            }
+        }
+    }
+
+    private fun decide(source: ImportSource) {
         if (consent.state.value != ConsentState.Given(consent.currentVersion)) consentFor = source else start(source)
     }
 

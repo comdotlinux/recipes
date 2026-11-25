@@ -374,6 +374,32 @@ class ImportUiTest : UiTest() {
     }
 
     @Test
+    fun consentNotLoadedYetIsLoadedFirstSoAnAgreedUserSeesNoNotice() = runComposeUiTest {
+        val consent = FakeConsentRepository().apply {
+            state.value = ConsentState.Unknown
+            stateAfterRefresh = ConsentState.Given(1)
+        }
+        val s = app(consent = consent)
+        importLink()
+        waitForText(RUNNING)
+        assertEquals(1, s.consent.refreshCalls)
+        assertEquals(0, s.consent.acceptCalls, "the notice was not shown")
+        assertEquals(1, s.imports.starts.size)
+    }
+
+    @Test
+    fun consentNotLoadedYetAndOfflineSendsNothing() = runComposeUiTest {
+        val consent = FakeConsentRepository().apply {
+            state.value = ConsentState.Unknown
+            online = false
+        }
+        val s = app(consent = consent)
+        importLink()
+        waitForText("Connect to the internet to import.")
+        assertTrue(s.imports.starts.isEmpty(), "nothing is sent while consent is unknown")
+    }
+
+    @Test
     fun consentThatCannotBeSavedOfflineSendsNothing() = runComposeUiTest {
         val consent = FakeConsentRepository(given = false).apply { online = false }
         val s = app(consent = consent)
