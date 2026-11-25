@@ -152,7 +152,7 @@ export function parseSessionToken(token: string, env: Env): Promise<{ userId: st
 
 `Env` additions used by auth: secrets `USER_ID_PEPPER`, `SERVER_KEY`, `TURNSTILE_SECRET`; variables `APPLE_AUDIENCES` and `GOOGLE_AUDIENCES` (comma-separated). Outbound calls (provider keys, Turnstile) go through the global `fetch`, so tests can intercept them.
 
-### Client: `shared/src/commonMain/kotlin/de/munichtech/recipes/data/Repositories.kt`
+### Client: `shared/src/commonMain/kotlin/com/linux/recipes/data/Repositories.kt`
 
 ```kotlin
 sealed interface SessionState {
