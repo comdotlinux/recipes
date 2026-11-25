@@ -1,0 +1,139 @@
+<resources>
+    <!-- General -->
+    <string name="app_name">Recipes</string>
+    <string name="action_back">Back</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_close">Close</string>
+
+    <!-- Sign-in -->
+    <string name="signin_tagline">Your own recipes, in one calm place, on every device you cook with.</string>
+    <string name="signin_age_confirmation">I am 16 or older</string>
+    <string name="signin_age_hint">Please confirm your age to continue.</string>
+    <string name="signin_button">Sign in</string>
+    <string name="signin_check_title">One quick check</string>
+    <string name="signin_check_body">This short check keeps automated sign-ins out. It usually finishes on its own.</string>
+    <string name="signin_progress">Signing in…</string>
+    <string name="signin_cancelled">Sign-in was cancelled. You can try again whenever you are ready.</string>
+    <string name="signin_failed_network">No connection. Check your internet and try again.</string>
+    <string name="signin_failed_rejected">Sign-in did not work. Please try again.</string>
+    <string name="signin_failed_age">Please confirm that you are 16 or older.</string>
+    <string name="signin_failed_account_deleting">This account is being deleted. You can sign in again once that is finished.</string>
+    <string name="signin_failed_rate_limited">Too many attempts. Please wait a moment and try again.</string>
+
+    <!-- Recipe list -->
+    <string name="list_search_placeholder">Search titles and tags</string>
+    <string name="list_clear_search">Clear search</string>
+    <string name="list_settings">Settings</string>
+    <string name="list_add">New recipe</string>
+    <string name="list_offline">Offline. Showing the recipes saved on this device.</string>
+    <string name="list_loading">Loading your recipes…</string>
+    <string name="list_empty_title">Your recipe box is empty</string>
+    <string name="list_empty_body">Add the first dish you love to cook. It will be here on every device you sign in on.</string>
+    <string name="list_empty_action">Add a recipe</string>
+    <string name="list_no_matches">No recipe matches “%1$s”.</string>
+    <plurals name="servings_count">
+        <item quantity="one">%1$d serving</item>
+        <item quantity="other">%1$d servings</item>
+    </plurals>
+    <string name="minutes_short">%1$d min</string>
+    <string name="unit_minutes">min</string>
+
+    <!-- Recipe detail -->
+    <string name="detail_edit">Edit recipe</string>
+    <string name="detail_delete">Delete recipe</string>
+    <string name="detail_serves">Serves</string>
+    <string name="detail_prep">Prep</string>
+    <string name="detail_cook">Cook</string>
+    <string name="detail_ingredients">Ingredients</string>
+    <string name="detail_steps">Method</string>
+    <string name="detail_tags">Tags</string>
+    <string name="detail_source">Source</string>
+    <string name="detail_picture">Picture %1$d of %2$d</string>
+    <string name="detail_picture_pending">This picture is not on this device yet. It will appear after the next sync.</string>
+    <string name="detail_missing">This recipe is no longer here. It may have been deleted on another device.</string>
+    <string name="detail_unfinished">No ingredients or steps yet.</string>
+    <string name="detail_unfinished_action">Add ingredients and steps</string>
+    <string name="detail_delete_title">Delete this recipe?</string>
+    <string name="detail_delete_body">“%1$s” will be removed from all your devices. This cannot be undone.</string>
+    <string name="detail_delete_confirm">Delete</string>
+    <string name="detail_delete_failed">The recipe could not be deleted. Check your connection and try again.</string>
+
+    <!-- Recipe editor -->
+    <string name="edit_title_new">New recipe</string>
+    <string name="edit_title_edit">Edit recipe</string>
+    <string name="edit_save">Save</string>
+    <string name="edit_saving">Saving…</string>
+    <string name="edit_section_pictures">Pictures</string>
+    <string name="edit_section_basics">Basics</string>
+    <string name="edit_section_ingredients">Ingredients</string>
+    <string name="edit_section_steps">Method</string>
+    <string name="edit_section_tags">Tags</string>
+    <string name="edit_section_more">More details</string>
+    <string name="edit_field_title">Title</string>
+    <string name="edit_field_description">Short description</string>
+    <string name="edit_field_servings">Servings</string>
+    <string name="edit_field_prep">Prep</string>
+    <string name="edit_field_cook">Cook</string>
+    <string name="edit_field_quantity">Amount</string>
+    <string name="edit_field_unit">Unit</string>
+    <string name="edit_field_item">Ingredient</string>
+    <string name="edit_field_group">Section name</string>
+    <string name="edit_field_step">Step %1$d</string>
+    <string name="edit_field_tag">New tag</string>
+    <string name="edit_field_source">Source link</string>
+    <string name="edit_field_language">Language code</string>
+    <string name="edit_add_ingredient">Add ingredient</string>
+    <string name="edit_add_group">Add section</string>
+    <string name="edit_add_step">Add step</string>
+    <string name="edit_add_tag">Add tag</string>
+    <string name="edit_take_photo">Take photo</string>
+    <string name="edit_choose_pictures">Choose pictures</string>
+    <string name="edit_pictures_hint">Up to %1$d pictures.</string>
+    <string name="edit_picture_remove">Remove picture %1$d</string>
+    <string name="edit_picture_failed">That picture could not be used. Try another one.</string>
+    <string name="edit_move_up">Move up</string>
+    <string name="edit_move_down">Move down</string>
+    <string name="edit_remove_row">Remove</string>
+    <string name="edit_remove_tag">Remove tag %1$s</string>
+    <string name="edit_error_required">Required</string>
+    <string name="edit_error_too_long">At most %1$d characters</string>
+    <string name="edit_error_range">Enter a whole number from %1$d to %2$d</string>
+    <string name="edit_error_too_many">At most %1$d entries</string>
+    <string name="edit_error_duplicate_tag">This tag is already there</string>
+    <string name="edit_error_language">Use a code such as “en” or “de-AT”</string>
+    <string name="edit_error_form">Please fix the highlighted fields.</string>
+    <string name="edit_offline">You are offline. Your changes are still here; save again once you are connected.</string>
+    <string name="edit_conflict_title">Changed on another device</string>
+    <string name="edit_conflict_body">This recipe was changed somewhere else while you were editing. Reload it to see the latest version; your edits here will be replaced.</string>
+    <string name="edit_conflict_offline">You are offline, so the latest version cannot be loaded. Connect and try Reload again.</string>
+    <string name="edit_conflict_reload">Reload</string>
+    <string name="edit_deleted_elsewhere">This recipe was deleted on another device. Save to keep your version as a new recipe.</string>
+    <string name="edit_conflict_keep">Keep editing</string>
+    <string name="edit_rejected_too_large">This recipe is too large to save. Shorten some text and try again.</string>
+    <string name="edit_rejected_limit">You have reached the limit of 2,000 recipes.</string>
+    <string name="edit_rejected_image_too_large">A picture is too large to upload.</string>
+    <string name="edit_rejected_storage">Your picture storage is full. Remove some pictures and try again.</string>
+    <string name="edit_rejected_image_limit">A recipe can have at most 5 pictures.</string>
+    <string name="edit_rejected_recipe_storage">Your recipe storage is full (20 MB). Delete some recipes and try again.</string>
+    <string name="edit_rejected_other">The recipe could not be saved. Please try again.</string>
+    <string name="edit_discard_title">Discard your changes?</string>
+    <string name="edit_discard_body">The changes you made to this recipe have not been saved.</string>
+    <string name="edit_discard_confirm">Discard</string>
+    <string name="edit_discard_keep">Keep editing</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_account">Account</string>
+    <string name="settings_support_id">Support ID</string>
+    <string name="settings_support_id_hint">Tell support this ID if you need help. It does not reveal who you are.</string>
+    <string name="settings_copy_support_id">Copy Support ID</string>
+    <string name="settings_support_id_copied">Support ID copied</string>
+    <string name="settings_sign_out">Sign out</string>
+    <string name="settings_sign_out_title">Sign out of Recipes?</string>
+    <string name="settings_sign_out_body">Your recipes stay in your account. This device forgets them until you sign in again.</string>
+    <string name="settings_legal">Legal</string>
+    <string name="settings_privacy">Privacy policy</string>
+    <string name="settings_imprint">Imprint</string>
+    <string name="settings_terms">Terms of use</string>
+    <string name="settings_opens_browser">Opens in your browser</string>
+</resources>

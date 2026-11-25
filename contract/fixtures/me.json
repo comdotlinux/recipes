@@ -1,0 +1,9 @@
+{
+  "userId": "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE",
+  "state": "active",
+  "suspension": null,
+  "entitlement": { "active": false, "expiresAt": null },
+  "quota": { "freeImportUsed": false, "monthUsed": 0, "monthLimit": 30 },
+  "storage": { "usedBytes": 0, "capBytes": 52428800 },
+  "consentVersion": null
+}

@@ -31,7 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           cf --version
-          # Plain `cf` can also be the Cloud Foundry CLI; Cloudflare's names itself in its help text.
+          # Another tool also installs a `cf` binary; Cloudflare's names itself in its help text.
           help="$(cf --help 2>&1)"
           grep -q "The Cloudflare CLI" <<<"${help}" || { echo "::error::cf is not the Cloudflare CLI"; exit 1; }
           expected="$(mise current bun)"
@@ -50,6 +50,16 @@ jobs:
       - name: Production bundle (wrangler deploy --dry-run)
         working-directory: backend
         run: bun run build:check
+      - name: Turnstile test key absent from production bundle
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          # Cloudflare's always-pass/always-fail Turnstile test keys start with 1x00000000000000000000 and end in AA.
+          if grep -rEl '1x0{20,}AA' dist; then
+            echo "::error::a Turnstile test key is in the production bundle"
+            exit 1
+          fi
+          echo "dist contains no Turnstile test key"
       - name: Test-only marker absent from production bundle (AC30)
         working-directory: backend
         run: |

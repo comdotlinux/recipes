@@ -21,7 +21,7 @@ The wrangler and vitest half of S1 is in `docs/spikes/S1-bun-runtime.md`: everyt
 | Tool | Pin | Reason |
 |------|-----|--------|
 | bun | 1.4.5 | latest in `mise ls-remote bun` |
-| `npm:cf` | 1.0.0-rc.4 | `npm view cf dist-tags` gives `{ latest: '1.0.0-rc.4' }`. The registry short name `cf` is the Cloud Foundry CLI; the registry alias `cloudflare-cf` maps to `npm:cf`, and the explicit backend form is used to be unambiguous |
+| `npm:cf` | 1.0.0-rc.4 | `npm view cf dist-tags` gives `{ latest: '1.0.0-rc.4' }`. The registry short name `cf` is a different tool (not from Cloudflare); the registry alias `cloudflare-cf` maps to `npm:cf`, and the explicit backend form is used to be unambiguous |
 | node | 24.22.3 | runtime for `cf` only (this spike); inside the `cf` engines range |
 | java | temurin-25.0.5.1+2.0.LTS | owner prefers 25; see JDK matrix below |
 | maestro | cli-2.12.1 | latest in `mise ls-remote maestro`, matches plan |
@@ -31,7 +31,7 @@ The wrangler and vitest half of S1 is in `docs/spikes/S1-bun-runtime.md`: everyt
 
 ### JDK matrix (checked 2026-11-24)
 
-Owner decision: use JDK 25 if Gradle 9.7.0, AGP 9.3.1, Kotlin 2.4.21, Robolectric 4.18.1 and Kover 0.9.11 all allow it, else 21.
+Owner decision: Java 25 is fixed. The table below records that Gradle 9.7.0, AGP 9.3.1, Kotlin 2.4.21, Robolectric 4.18.1 and Kover 0.9.11 allow it.
 
 | Component | JDK 25 to run the build | Source |
 |-----------|-------------------------|--------|
@@ -43,9 +43,14 @@ Owner decision: use JDK 25 if Gradle 9.7.0, AGP 9.3.1, Kotlin 2.4.21, Robolectri
 | Robolectric 4.18.1 | no maximum stated, no known blocker. 4.18 added JDK 24+ handling ("Enable native access for the native runtime on JDK 24+", #11482). Issue #11470 "New warnings when using robolectric with JDK 25" was about warnings only and is closed. Robolectric's own CI runs on JDK 21 (`.github/.java-version`), so 25 is used but not tested there | https://github.com/robolectric/robolectric/releases/tag/robolectric-4.18, https://github.com/robolectric/robolectric/issues/11470, https://github.com/robolectric/robolectric/blob/master/.github/.java-version |
 | Kover 0.9.11 | no maximum stated, no known blocker. The README gives only minimums (JVM 1.7 for tests, Gradle 6.8.3, AGP 7.0.0). No issue in the repo mentions JDK 25 or Java 25 | https://github.com/Kotlin/kotlinx-kover/blob/main/README.md, https://github.com/Kotlin/kotlinx-kover/blob/main/CHANGELOG.md |
 
-Result: no component states a maximum below 25 or has a known JDK 25 blocker, so Temurin 25 runs Gradle. The pin `temurin-25.0.5.1+2.0.LTS` is the current Temurin 25 release (`jdk-25.0.5.1+2`, published 2026-11-18 on github.com/adoptium/temurin25-binaries). No fallback to 21 was needed.
+Result: no component states a maximum below 25 or has a known JDK 25 blocker, so Temurin 25 runs Gradle. The pin `temurin-25.0.5.1+2.0.LTS` is the current Temurin 25 release (`jdk-25.0.5.1+2`, published 2026-11-18 on github.com/adoptium/temurin25-binaries).
 
-Residual risk: AGP, Robolectric and Kover state only minimums, and Robolectric CI tests on JDK 21. The first Gradle build with host tests and Kover on JDK 25 is the real proof. If that build fails because of JDK 25, set the pin to `temurin-21.0.13.1+2.0.LTS`. Side note: AGP 9.3.1 lint crashes on JDK 17 (issue #522845800, fixed in 9.3.2), so 17 is not an option anyway.
+Residual risk: AGP, Robolectric and Kover state only minimums, and Robolectric CI tests on JDK 21. The first Gradle build with host tests and Kover on JDK 25 is the real proof. Side note: AGP 9.3.1 lint crashes on JDK 17 (issue #522845800, fixed in 9.3.2).
+
+Owner rule if JDK 25 causes trouble (never change the Java version):
+
+1. If a runner cannot obtain Temurin 25 through mise, install Temurin 25 with a dedicated Java setup action pinned by commit SHA.
+2. If a build tool itself turns out to be incompatible with JDK 25, stop and ask the owner.
 
 The JDK that runs Gradle is separate from the bytecode target of the Android code. Per https://developer.android.com/build/jdks, Android API 34 supports Java 17 language features and core libraries, and the target defaults to the toolchain version when not set. So the Gradle files must set the target to 17 explicitly (`compileOptions` `sourceCompatibility`/`targetCompatibility = JavaVersion.VERSION_17` and Kotlin `compilerOptions.jvmTarget = JvmTarget.JVM_17`) and must not set `jvmToolchain(25)`, which would raise the target to 25.
 
@@ -235,7 +240,7 @@ openjdk version "21.0.13.1" 2026-11-17 LTS
 ## Notes for the other workers
 
 - Run tools through mise: `mise exec -- <tool> ...` (or activate mise in the shell). In CI, install mise, then run `mise install` in the repo root.
-- `cf --version` prints only the bare version (`1.0.0-rc.4`). It does not name the product. To prove it is the Cloudflare CLI and not Cloud Foundry (which prints `cf version 8.x`), check `cf --help | grep -q "The Cloudflare CLI"`. Use this in the AC1 CI step.
+- `cf --version` prints only the bare version (`1.0.0-rc.4`). It does not name the product. To prove it is the Cloudflare CLI and not another tool with the same binary name, check `cf --help | grep -q "The Cloudflare CLI"`. Use this in the AC1 CI step.
 - node is in `mise.toml` for `cf` and `wrangler dev` only. That does not change the bun-first rule: use `bun install` and `bun run`, not npm.
 - `ANDROID_HOME` comes from mise `[env]` and respects an existing value. Gradle reads it, so no `local.properties` is needed.
 - `JAVA_HOME` is set by mise to Temurin 25 inside `mise exec`. Android bytecode target: 17 (see JDK matrix).
