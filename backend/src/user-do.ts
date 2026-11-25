@@ -1159,6 +1159,22 @@ export class UserDO extends DurableObject<Env> {
 		});
 	}
 
+	/**
+	 * POST /account/delete-web, after the Worker verified Turnstile, the nonce and the provider's id token. Never creates
+	 * storage: an id without an account, or a tombstone, answers 404; a deletion already running answers 202 again.
+	 */
+	async deleteAccountWeb(a: { nonceId: string; nonceExpiresAt: number; apple?: AppleCode }): Promise<Result> {
+		const now = Date.now();
+		if (accountState(this.sql) === "deleting") return { status: 202, body: { state: "deleting" } };
+		if (!this.live()) return error(404, "no_account", "no account for this sign-in");
+		const used = this.sql.exec("INSERT INTO used_nonces (nonce_id, expires_at) VALUES (?, ?) ON CONFLICT DO NOTHING", a.nonceId, a.nonceExpiresAt);
+		if (used.rowsWritten === 0) return error(401, "invalid_nonce", "nonce already used");
+		// The apple step of the deletion exchanges this code and revokes the token it yields.
+		if (a.apple) this.setMeta("apple_auth_code", JSON.stringify({ ...a.apple, at: now }));
+		await this.startDeletion(now);
+		return { status: 202, body: { state: "deleting" } };
+	}
+
 	/** One synchronous step: state, sessions, share links and pending work, then the deletion task. */
 	protected async startDeletion(now: number): Promise<void> {
 		this.event({ event: "account_deletion", outcome: "started" });

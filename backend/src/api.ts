@@ -17,7 +17,9 @@ import { TRANSLATION_LANGUAGES } from "./ai/translate";
 import { systemEvent } from "./metrics";
 import { ID_PATTERN, MAX_RECIPE_BYTES, RecipeInput, isId } from "./recipes";
 import { SHARE_ID, openShareToken } from "./share";
-import { type UserDO, userNamespace } from "./user-do";
+import { type AppleCode, type UserDO, userNamespace } from "./user-do";
+import { DELETE_PAGE, deletePageConfig, deletePageCsp, deletePageHtml } from "./account-page";
+import { pageHeaders } from "./web";
 
 export type TestProvider = (idToken: string, nonce: string) => Promise<{ sub: string } | null>;
 
@@ -88,6 +90,7 @@ type UserObject = Pick<
 	| "refreshFromClient"
 	| "entitlementChanged"
 	| "deleteAccount"
+	| "deleteAccountWeb"
 >;
 
 const MAX_WEBHOOK_BODY = 64 * 1024;
@@ -215,49 +218,99 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 		return c.json({ nonce: await issueNonce(c.env, Date.now()) });
 	});
 
-	app.post("/v1/session", async (c) => {
-		if (await limitedByIp(c, "session")) return fail(c, 429, "rate_limited", "too many requests");
-		const rejected = (status: number, code: string) => {
+	type Rejected = (status: number, code: string) => Response;
+	const rejecter =
+		(c: C, what: string): Rejected =>
+		(status, code) => {
 			systemEvent(c.env, { event: "auth_failure", reason: code });
-			return fail(c, status, code, `session refused: ${code}`);
+			return fail(c, status, code, `${what} refused: ${code}`);
 		};
+
+	/** The size-checked JSON body parsed with `schema`, or the 400 / 411 answer. */
+	const identityBody = async <T>(c: C, schema: z.ZodType<T>, rejected: Rejected): Promise<T | Response> => {
 		const size = bodyCheck(c, MAX_SESSION_BODY);
 		if (size === "length_required") return reply(c, LENGTH_REQUIRED);
 		if (size === "too_long") return rejected(400, "invalid_body");
 		const text = await c.req.text();
-		let parsed: z.infer<typeof SessionRequest>;
 		try {
 			if (byteLength(text) > MAX_SESSION_BODY) throw new Error("too large");
-			parsed = SessionRequest.parse(JSON.parse(text));
+			return schema.parse(JSON.parse(text));
 		} catch {
 			return rejected(400, "invalid_body");
 		}
-		if (!parsed.ageConfirmed) return rejected(400, "age_confirmation_required");
-		if (!(await verifyTurnstile(parsed.turnstileToken, c.req.header("cf-connecting-ip") ?? null, c.env))) return rejected(401, "invalid_turnstile");
+	};
+
+	/**
+	 * The ownership proof shared by sign-in and web deletion, in this order: Turnstile, nonce signature and expiry, id
+	 * token (signature, issuer, audience, expiry, nonce claim). Single use of the nonce is enforced by the user's object.
+	 */
+	const prove = async (
+		c: C,
+		p: { provider: string; idToken: string; nonce: string; turnstileToken: string; appleAuthCode?: string },
+		rejected: Rejected,
+		redirectUri?: string,
+	): Promise<{ userId: string; nonce: { id: string; expiresAt: number }; apple?: AppleCode } | Response> => {
+		if (!(await verifyTurnstile(p.turnstileToken, c.req.header("cf-connecting-ip") ?? null, c.env))) return rejected(401, "invalid_turnstile");
 		const now = Date.now();
-		const nonce = await verifyNonce(parsed.nonce, c.env, now);
+		const nonce = await verifyNonce(p.nonce, c.env, now);
 		if (!nonce) return rejected(401, "invalid_nonce");
 		const subject =
-			parsed.provider === "test"
-				? await options.testProvider!(parsed.idToken, parsed.nonce)
-				: await verifyIdToken(parsed.provider as Provider, parsed.idToken, parsed.nonce, c.env, now);
+			p.provider === "test" ? await options.testProvider!(p.idToken, p.nonce) : await verifyIdToken(p.provider as Provider, p.idToken, p.nonce, c.env, now);
 		if (subject === "unavailable") {
 			// Its own event, so a provider outage does not look like a wave of failed sign-ins.
-			systemEvent(c.env, { event: "provider_unavailable", provider: parsed.provider });
+			systemEvent(c.env, { event: "provider_unavailable", provider: p.provider });
 			return fail(c, 503, "provider_unavailable", "the provider's signing keys could not be fetched");
 		}
 		if (!subject) return rejected(401, "invalid_token");
-		const userId = await deriveUserId(parsed.provider, subject.sub, c.env);
-		const { token, secretHash } = await newSessionToken(userId, c.env);
+		const userId = await deriveUserId(p.provider as Provider | "test", subject.sub, c.env);
 		// The code is exchanged later for the refresh token that account deletion revokes (plan 4.7).
 		const clientId = (subject as { aud?: string }).aud;
-		const apple = parsed.provider === "apple" && parsed.appleAuthCode && clientId ? { code: parsed.appleAuthCode, clientId } : undefined;
+		const apple = p.provider === "apple" && p.appleAuthCode && clientId ? { code: p.appleAuthCode, clientId, ...(redirectUri ? { redirectUri } : {}) } : undefined;
+		return { userId, nonce, apple };
+	};
+
+	app.post("/v1/session", async (c) => {
+		if (await limitedByIp(c, "session")) return fail(c, 429, "rate_limited", "too many requests");
+		const rejected = rejecter(c, "session");
+		const parsed = await identityBody(c, SessionRequest, rejected);
+		if (parsed instanceof Response) return parsed;
+		if (!parsed.ageConfirmed) return rejected(400, "age_confirmation_required");
+		const proof = await prove(c, parsed, rejected);
+		if (proof instanceof Response) return proof;
+		const { userId, nonce, apple } = proof;
+		const { token, secretHash } = await newSessionToken(userId, c.env);
 		const result = await userObject(c.env, userId).createSession({ nonceId: nonce.id, nonceExpiresAt: nonce.expiresAt, secretHash, platform: parsed.provider, apple });
 		if (result.status !== 200) {
 			systemEvent(c.env, { event: "auth_failure", reason: (result.body as { error: { code: string } }).error.code });
 			return reply(c, result);
 		}
 		return c.json({ token, userId, expiresAt: (result.body as { expiresAt: string }).expiresAt });
+	});
+
+	// docs/api.md "Milestone M6": web deletion for people without the app.
+	app.get(DELETE_PAGE, (c) => {
+		const config = deletePageConfig(c.env);
+		if (!config) return fail(c, 404, "not_found", "web deletion is not configured");
+		return c.body(deletePageHtml(config, new URL(c.req.url).origin), 200, pageHeaders(deletePageCsp(config)));
+	});
+
+	const WebDeletionRequest = z.strictObject({
+		provider: z.enum(["apple", "google"]),
+		idToken: z.string().min(1).max(8192),
+		nonce: z.string().min(1).max(512),
+		turnstileToken: z.string().min(1).max(4096),
+		appleAuthCode: z.string().min(1).max(4096).optional(),
+	});
+
+	app.post("/v1/account/delete-web", async (c) => {
+		if (await limitedByIp(c, "delete-web")) return fail(c, 429, "rate_limited", "too many requests");
+		const rejected = rejecter(c, "web deletion");
+		const parsed = await identityBody(c, WebDeletionRequest, rejected);
+		if (parsed instanceof Response) return parsed;
+		// The page's Sign in with Apple request carried this redirect URI, so the code exchange must name it too.
+		const proof = await prove(c, parsed, rejected, `${new URL(c.req.url).origin}${DELETE_PAGE}`);
+		if (proof instanceof Response) return proof;
+		return reply(c, await userObject(c.env, proof.userId).deleteAccountWeb({ nonceId: proof.nonce.id, nonceExpiresAt: proof.nonce.expiresAt, apple: proof.apple }));
 	});
 
 	app.delete(
