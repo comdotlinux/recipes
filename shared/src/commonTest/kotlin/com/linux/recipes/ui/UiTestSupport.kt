@@ -25,6 +25,7 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.unit.dp
 import com.linux.recipes.App
+import com.linux.recipes.data.BillingRepository
 import com.linux.recipes.platform.LocalTurnstileView
 import com.linux.recipes.ui.edit.LocalPictureActions
 import com.linux.recipes.ui.edit.PictureActions
@@ -68,12 +69,13 @@ fun ComposeUiTest.setApp(
     translations: FakeTranslationRepository? = null,
     appearance: AppearanceStore? = null,
     sharing: SharingServices? = null,
+    billing: BillingRepository? = null,
 ) {
     setScreen {
         CompositionLocalProvider(LocalUriHandler provides uriHandler, LocalSharing provides sharing) {
             App(
                 session, recipes, darkTheme, turnstile, importRepository = imports, consentRepository = consent,
-                translationRepository = translations, appearance = appearance,
+                billingRepository = billing, translationRepository = translations, appearance = appearance,
             )
         }
     }

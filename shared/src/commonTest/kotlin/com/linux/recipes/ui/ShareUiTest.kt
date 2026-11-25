@@ -94,6 +94,23 @@ class ShareUiTest : UiTest() {
     }
 
     @Test
+    fun subscribingOnThePaywallCreatesTheLink() = runComposeUiTest {
+        shares.createResults = mutableListOf(ShareCreate.SubscriptionRequired, ShareCreate.Created(testLink))
+        val store = FakeBillingProvider()
+        setApp(FakeSessionRepository(signedIn = true), recipes, sharing = sharing, billing = FakeBillingRepository(store))
+        openShareSheet()
+        click("Create link")
+        waitForText("Share recipes with a link")
+        waitForText("Monthly")
+        click("Monthly")
+        onNode(androidx.compose.ui.test.hasText("Subscribe")).performScrollTo()
+        click("Subscribe")
+        waitForText("Works until 2026-12-25")
+        assertEquals(listOf("monthly"), store.purchases)
+        assertEquals(2, shares.created.size)
+    }
+
+    @Test
     fun consentMissingShowsTheAiNoticeThenCreates() = runComposeUiTest {
         shares.createResults = mutableListOf(ShareCreate.ConsentRequired, ShareCreate.Created(testLink))
         startWithSharing()
