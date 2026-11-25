@@ -585,3 +585,90 @@ Rules:
 - After the store accepts a purchase or a restore, the repository calls `POST /entitlement/refresh`: `entitlement.active` true is `Success`, false, offline, 429 and 503 are `Pending` (the next `quota()` settles it), 401 is `Failed` and ends the session. Whatever the store refuses is returned without a refresh. A restore that finds no active `recipes_pro` is `Failed`.
 - The paywall opens on `ImportStart.QuotaExhausted` and from "Recipes Pro" in Settings. After `Success` it closes and the import that hit the limit starts again with a new Idempotency-Key.
 - Debug builds of the Android app use a provider in `androidApp/src/debug` with fixed, labelled test prices; a purchase calls the local Worker's `POST /v1/testing/entitlement` (see "Local environment only"). `:androidApp:verifyReleaseIsolation` fails if it reaches a release APK.
+
+### Client, milestone M5: `data/ShareRepositories.kt`, `data/PdfDownload.kt` and `data/Backup.kt`
+
+```kotlin
+/** A link this device made. The server keeps no list of an owner's links, so the app keeps its own. */
+data class ShareLink(val shareId: String, val recipeId: String, val url: String, val expiresAt: String)
+
+sealed interface ShareCreate {
+    data class Created(val link: ShareLink) : ShareCreate
+    data object SubscriptionRequired : ShareCreate      // 402 subscription_required
+    data object ConsentRequired : ShareCreate           // 403 consent_required (the recipe has pictures)
+    data object PictureRejected : ShareCreate           // 422 picture_rejected
+    data object ShareLimit : ShareCreate                // 429 share_limit
+    data object ScreeningUnavailable : ShareCreate      // 503 screening_unavailable
+    data object Offline : ShareCreate                   // no connection, 429 rate_limited or another 5xx
+    data class Rejected(val code: String) : ShareCreate // 404 and anything else
+}
+
+sealed interface ShareOpen {
+    data class Preview(val preview: SharePreview) : ShareOpen
+    data object Gone : ShareOpen                        // 410 share_gone
+    data object NotFound : ShareOpen                    // 404
+    data object OwnShare : ShareOpen                    // 409 own_share
+    data object Offline : ShareOpen
+    data class Rejected(val code: String) : ShareOpen
+}
+
+sealed interface ShareAccept {
+    data class Accepted(val recipe: Recipe) : ShareAccept
+    data object RecipeLimit : ShareAccept               // 409 recipe_limit
+    data object RecipeStorageCap : ShareAccept          // 413 recipe_storage_cap
+    data object StorageCap : ShareAccept                // 413 storage_cap
+    data object Unreadable : ShareAccept                // 422 share_unreadable
+    data object Gone : ShareAccept
+    data object NotFound : ShareAccept
+    data object OwnShare : ShareAccept
+    data object Offline : ShareAccept
+    data class Rejected(val code: String) : ShareAccept
+}
+
+interface ShareRepository {
+    /** Links made on this device that have not expired or been revoked, newest first. Cleared on sign-out. */
+    val links: StateFlow<List<ShareLink>>
+    suspend fun create(recipeId: String): ShareCreate
+    /** True once the link is gone on the server (204, or 404 because it no longer exists). */
+    suspend fun revoke(shareId: String): Boolean
+    suspend fun open(token: String): ShareOpen
+    /** On success the recipes are synced, so the copy appears in the list. */
+    suspend fun accept(token: String): ShareAccept
+    /** 204 and 410 share_gone both count as done. */
+    suspend fun report(token: String, reason: ReportReason, note: String): Boolean
+}
+
+object ShareLinks {
+    fun isToken(value: String?): Boolean                              // 107 base64url characters
+    fun tokenFromUrl(url: String?, host: String): String?              // exactly https://<host>/s#<token>, else null
+    fun tokenFromIntent(dataUrl: String?, extra: String?, host: String): String?  // the fragment, else the shareToken extra
+    fun hostOf(baseUrl: String): String
+}
+
+sealed interface PdfResult {
+    class Ready(val bytes: ByteArray) : PdfResult
+    data object Limit : PdfResult                       // 429 pdf_limit
+    data object Unavailable : PdfResult                 // 503 pdf_unavailable
+    data object Offline : PdfResult
+    data class Rejected(val code: String) : PdfResult
+}
+
+class PdfDownload(api: Api, currentToken: () -> String?, onUnauthorized: suspend () -> Unit) {
+    suspend fun download(recipeId: String): PdfResult
+}
+
+class Backup(api: Api, recipes: RecipeRepository, currentToken: () -> String?, onUnauthorized: suspend () -> Unit) {
+    val progress: StateFlow<BackupProgress?>             // items done of total while running
+    /** Syncs, stops with MissingPictures when a picture is not on the device, and only then opens [save]. */
+    suspend fun export(save: suspend (write: suspend (Sink) -> Unit) -> Boolean): ExportResult  // Done | MissingPictures | Offline | Cancelled
+    /** Header check and the picture bytes the account does not hold yet, against the free storage of GET /me. */
+    suspend fun check(source: Source): RestoreCheck      // Ready(RestorePlan(.., overCap)) | Refused | Offline
+    suspend fun restore(source: Source): RestoreResult   // Done(written, unchanged, skipped lists, malformedLines) | Refused | Interrupted
+}
+```
+
+Rules:
+- Share links are parsed strictly: scheme `https`, the exact host of `API_BASE_URL` (letter case ignored, no port or user), path `/s`, no query, and a fragment that is one token. Anything else is not a share link. On Android the `shareToken` extra is accepted when it has the token's shape.
+- A link opened while signed out is kept in memory and its preview opens right after sign-in.
+- Backup file (UTF-8, one JSON object per line): a header `{"format":"recipes-backup","version":1,"recipes":N,"pictures":M,"pictureBytes":B}`, then N lines `{"type":"recipe","recipe":<RecipeInput>}`, then M lines `{"type":"picture","recipeId":…,"id":…,"mime":…,"size":…,"data":"<base64>"}`. Lines longer than 2,200,000 bytes are skipped unread.
+- Restore keeps the ids of the file. A recipe is first written with only the pictures the server already holds; each picture is then uploaded and attached with a `PUT` on the current `rev`. Unchanged recipes and pictures already attached cause no request, so a second run sends no writes and an interrupted run completes when repeated. Refusals (`recipe_limit`, `recipe_storage_cap`, `storage_cap`, …) are listed and the restore goes on; no connection, 429, 5xx and 401 stop it (`Interrupted`).
