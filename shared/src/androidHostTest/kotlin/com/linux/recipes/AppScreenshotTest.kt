@@ -7,7 +7,25 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.v2.runComposeUiTest
 import com.github.takahirom.roborazzi.captureRoboImage
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.linux.recipes.data.ImportJobState
+import com.linux.recipes.data.ImportOutcome
+import com.linux.recipes.ui.FakeConsentRepository
+import com.linux.recipes.ui.FakeImportRepository
 import com.linux.recipes.ui.FakeRecipeRepository
+import com.linux.recipes.ui.importedDraft
+import com.linux.recipes.ui.imports.AiNoticeContent
+import com.linux.recipes.ui.imports.ImportPaywallContent
+import com.linux.recipes.ui.imports.ImportSheetContent
+import com.linux.recipes.ui.imports.ImportViewModel
+import com.linux.recipes.ui.imports.ReviewImportScreen
 import com.linux.recipes.ui.FakeSessionRepository
 import com.linux.recipes.ui.detail.RecipeDetailScreen
 import com.linux.recipes.ui.detail.RecipeDetailViewModel
@@ -111,6 +129,62 @@ class AppScreenshotTest : UiTest() {
 
     @Test
     fun settings() = both("settings") {
-        SettingsScreen(remember { SettingsViewModel(FakeSessionRepository(signedIn = true)) }, {})
+        SettingsScreen(remember { SettingsViewModel(FakeSessionRepository(signedIn = true), FakeConsentRepository()) }, {})
+    }
+
+    // ---------- M2: AI import ----------
+
+    /** The sheets' content on the sheet colour, as the bottom sheet shows it (sheets open in their own window). */
+    @Composable
+    private fun OnSheet(content: @Composable () -> Unit) {
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.32f))) {
+            Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = MaterialTheme.shapes.extraLarge) {
+                Box(Modifier.padding(top = 28.dp)) { content() }
+            }
+        }
+    }
+
+    @Composable
+    private fun listWithJob(job: ImportJobState?) = RecipeListScreen(
+        remember { RecipeListViewModel(recipes()) }, {}, {}, {},
+        imports = remember { ImportViewModel(FakeImportRepository(job), FakeConsentRepository()) },
+    )
+
+    @Test
+    fun importSheet() = both("import_sheet") {
+        OnSheet { ImportSheetContent("https://example.com/pasta-e-ceci", {}, firstFree = true, {}, {}, {}) }
+    }
+
+    @Test
+    fun aiNotice() = both("ai_notice") { AiNoticeContent({}, {}) }
+
+    @Test
+    fun importRunning() = both("import_running") { listWithJob(ImportJobState("job", "url", outcome = null, offline = false)) }
+
+    @Test
+    fun importReady() = both("import_ready") { listWithJob(ImportJobState("job", "url", ImportOutcome.Done(importedDraft), offline = false)) }
+
+    @Test
+    fun importFailed() = both("import_failed") { listWithJob(ImportJobState("job", "url", ImportOutcome.Failed, offline = false)) }
+
+    @Test
+    fun importReview() = both("import_review") {
+        ReviewImportScreen(remember { RecipeEditViewModel(recipes(), null, "en", importedDraft) }, FakeImportRepository(), "job", {}, {})
+    }
+
+    @Test
+    fun importPaywall() = both("import_paywall") { OnSheet { ImportPaywallContent({}, {}) } }
+
+    /** 200 % font on the import screens. */
+    @Test
+    fun largeFontImport() {
+        RuntimeEnvironment.setFontScale(2f)
+        shot("large_font_import_ready", dark = false, before = {}) {
+            listWithJob(ImportJobState("job", "url", ImportOutcome.Done(importedDraft), offline = false))
+        }
+        shot("large_font_ai_notice", dark = false, before = {}) { AiNoticeContent({}, {}) }
+        shot("large_font_import_sheet", dark = false, before = {}) {
+            OnSheet { ImportSheetContent("", {}, firstFree = true, {}, {}, {}) }
+        }
     }
 }

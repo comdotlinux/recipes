@@ -18,6 +18,14 @@ import com.linux.recipes.ui.detail.RecipeDetailScreen
 import com.linux.recipes.ui.detail.RecipeDetailViewModel
 import com.linux.recipes.ui.edit.RecipeEditScreen
 import com.linux.recipes.ui.edit.RecipeEditViewModel
+import com.linux.recipes.data.ImportJobState
+import com.linux.recipes.data.ImportOutcome
+import com.linux.recipes.ui.imports.AiNoticeContent
+import com.linux.recipes.ui.imports.ImportPaywallContent
+import com.linux.recipes.ui.imports.ImportSheetContent
+import com.linux.recipes.ui.imports.ImportViewModel
+import com.linux.recipes.ui.imports.ReportContent
+import com.linux.recipes.ui.imports.ReviewImportScreen
 import com.linux.recipes.ui.list.RecipeListScreen
 import com.linux.recipes.ui.list.RecipeListViewModel
 import com.linux.recipes.ui.settings.SettingsScreen
@@ -116,6 +124,58 @@ class AccessibilityTest : UiTest() {
 
     @Test
     fun settingsClickablesAreLabelled() = everyClickableIsLabelled {
-        SettingsScreen(remember { SettingsViewModel(FakeSessionRepository(signedIn = true)) }, {})
+        SettingsScreen(remember { SettingsViewModel(FakeSessionRepository(signedIn = true), FakeConsentRepository()) }, {})
+    }
+
+    // ---------- M2: AI import. Sheets and dialogs open in their own window, so their content is checked here. ----------
+
+    private fun listWithJob(job: ImportJobState?, recipes: FakeRecipeRepository = FakeRecipeRepository(listOf(shakshuka))) =
+        everyClickableIsLabelled {
+            RecipeListScreen(
+                remember { RecipeListViewModel(recipes) }, {}, {}, {},
+                imports = remember { ImportViewModel(FakeImportRepository(job), FakeConsentRepository()) },
+            )
+        }
+
+    @Test
+    fun importButtonsAreLabelled() = screen({
+        RecipeListScreen(
+            remember { RecipeListViewModel(FakeRecipeRepository(listOf(shakshuka))) }, {}, {}, {},
+            imports = remember { ImportViewModel(FakeImportRepository(), FakeConsentRepository()) },
+        )
+    }) { found ->
+        assertNotNull(found.singleOrNull { it.label == "Import" }, "found: ${found.map { it.label }}")
+        assertNotNull(found.singleOrNull { it.label == "New recipe" }, "found: ${found.map { it.label }}")
+    }
+
+    @Test
+    fun emptyListImportIsLabelled() = listWithJob(null, FakeRecipeRepository())
+
+    @Test
+    fun readyCardClickablesAreLabelled() = listWithJob(ImportJobState("j", "url", ImportOutcome.Done(importedDraft), offline = false))
+
+    @Test
+    fun failedCardClickablesAreLabelled() = listWithJob(ImportJobState("j", "url", ImportOutcome.Failed, offline = false))
+
+    @Test
+    fun importSheetClickablesAreLabelled() = everyClickableIsLabelled {
+        ImportSheetContent("https://example.com", {}, firstFree = true, {}, {}, {})
+    }
+
+    @Test
+    fun aiNoticeClickablesAreLabelled() = everyClickableIsLabelled { AiNoticeContent({}, {}) }
+
+    @Test
+    fun paywallClickablesAreLabelled() = everyClickableIsLabelled { ImportPaywallContent({}, {}) }
+
+    @Test
+    fun reportClickablesAreLabelled() = everyClickableIsLabelled { ReportContent({ _, _ -> }, {}) }
+
+    @Test
+    fun reviewClickablesAreLabelled() = everyClickableIsLabelled {
+        ReviewImportScreen(
+            remember { RecipeEditViewModel(FakeRecipeRepository(), null, "en", importedDraft) },
+            FakeImportRepository(), "j", {}, {},
+        )
     }
 }

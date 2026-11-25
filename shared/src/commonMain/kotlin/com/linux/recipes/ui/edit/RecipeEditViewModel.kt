@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.linux.recipes.data.NewImage
+import com.linux.recipes.data.RecipeInput
 import com.linux.recipes.data.RecipeRepository
 import com.linux.recipes.data.SaveResult
 import kotlinx.coroutines.launch
@@ -24,15 +25,20 @@ sealed interface EditStatus {
     data object DeletedElsewhere : EditStatus
 }
 
-/** Creates a recipe when [recipeId] is null, otherwise edits the cached recipe with that id. */
+/**
+ * Creates a recipe when [recipeId] is null, otherwise edits the cached recipe with that id.
+ * With a [draft] (an AI import to review), the form starts from the draft and saving creates it.
+ */
 class RecipeEditViewModel(
     private val repository: RecipeRepository,
     recipeId: String?,
     defaultLanguage: String,
+    draft: RecipeInput? = null,
 ) : ViewModel() {
     val isNew = recipeId == null
+    val isReview = draft != null
     private var expectedRev: Long? = null
-    val form = RecipeForm(recipeId ?: Uuid.random().toString(), defaultLanguage)
+    val form = RecipeForm(draft?.id ?: recipeId ?: Uuid.random().toString(), defaultLanguage)
     var status by mutableStateOf<EditStatus>(EditStatus.Editing)
         private set
     /** Errors are shown only after the first save attempt, then kept live. */
@@ -44,6 +50,7 @@ class RecipeEditViewModel(
 
     init {
         if (recipeId != null) loadLatest(recipeId)
+        if (draft != null) form.load(draft)
     }
 
     /** False when the cache has no recipe with [id]. */

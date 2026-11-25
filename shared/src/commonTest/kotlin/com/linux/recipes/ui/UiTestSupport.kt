@@ -30,10 +30,12 @@ fun ComposeUiTest.setApp(
     recipes: FakeRecipeRepository,
     uriHandler: UriHandler = RecordingUriHandler(),
     darkTheme: Boolean = false,
+    imports: FakeImportRepository? = null,
+    consent: FakeConsentRepository? = null,
 ) {
     setContent {
         CompositionLocalProvider(LocalUriHandler provides uriHandler) {
-            App(session, recipes, darkTheme)
+            App(session, recipes, darkTheme, importRepository = imports, consentRepository = consent)
         }
     }
 }
