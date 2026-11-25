@@ -191,7 +191,7 @@ class ImportUiTest : UiTest() {
         waitForText("Review import")
         click("Tidy up with AI")
         waitForText("Tidy up with AI?")
-        onNodeWithText("AI makes a new draft from the text your phone read. This draft and your changes to it are not kept.").assertIsDisplayed()
+        onNodeWithText("AI makes a new draft from the text your phone read. The text read from the photo is sent, not your changes. This draft is not kept.").assertIsDisplayed()
         click("Keep editing")
         waitForNoText("Tidy up with AI?")
         onNodeWithText("Review import").assertIsDisplayed()

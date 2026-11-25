@@ -113,8 +113,8 @@ class LocalRecipeParserTest {
                 "Alles zu einem glatten Teig verrühren und kurz ruhen lassen.",
                 "In heißem Fett dünne Pfannkuchen ausbacken.",
             ),
-            // Only neutral units and no heading: nothing says German.
-            language = "en",
+            // No heading and only neutral units: common words and umlauts say German.
+            language = "de",
         ),
         Case(
             name = "English without headings, bullets and numbered steps",
@@ -130,7 +130,7 @@ class LocalRecipeParserTest {
             title = "Quick tomato sauce",
             ingredients = listOf(
                 Ingredient("2", "tbsp", "olive oil"),
-                Ingredient("1", "", "can tomatoes"),
+                Ingredient("1", "can", "tomatoes"),
                 Ingredient("", "", "salt and pepper"),
             ),
             steps = listOf("Warm the oil in a pan.", "Add the tomatoes and simmer for 20 minutes."),
@@ -258,6 +258,43 @@ class LocalRecipeParserTest {
             assertEquals(id, draft.id, c.name)
             assertEquals("", draft.description, c.name)
             assertEquals(null, draft.sourceUrl, c.name)
+        }
+    }
+
+    @Test
+    fun languageFromHeadingsUnitsCommonWordsAndUmlauts() {
+        val cases = listOf(
+            "Pfannkuchen\n250 g Mehl\n500 ml Milch\nMehl mit der Milch verrühren und ausbacken." to "de",
+            "Pancakes\n250 g flour\n500 ml milk\nWhisk the flour with the milk and fry." to "en",
+            "Apfelkuchen\n2 cups flour\n1 tsp cinnamon\nMix the flour and bake." to "en",
+            "Grießbrei\n1 l Milch\n100 g Grieß\nIn die Milch rühren." to "de",
+            "" to "en",
+        )
+        for ((text, expected) in cases) assertEquals(expected, recipeLanguage(text), text)
+    }
+
+    @Test
+    fun countableUnitsAreSplitOffTheItem() {
+        val cases = listOf(
+            "1 Dose Tomaten" to Ingredient("1", "Dose", "Tomaten"),
+            "2 Dosen Kichererbsen" to Ingredient("2", "Dosen", "Kichererbsen"),
+            "1 Bund Petersilie" to Ingredient("1", "Bund", "Petersilie"),
+            "3 Zehen Knoblauch" to Ingredient("3", "Zehen", "Knoblauch"),
+            "2 Stück Ingwer" to Ingredient("2", "Stück", "Ingwer"),
+            "1 Becher Sahne" to Ingredient("1", "Becher", "Sahne"),
+            "4 Scheiben Toast" to Ingredient("4", "Scheiben", "Toast"),
+            "1 Glas Kapern" to Ingredient("1", "Glas", "Kapern"),
+            "1 Msp. Muskat" to Ingredient("1", "Msp.", "Muskat"),
+            "2 cans chickpeas" to Ingredient("2", "cans", "chickpeas"),
+            "3 cloves garlic" to Ingredient("3", "cloves", "garlic"),
+            "1 stick butter" to Ingredient("1", "stick", "butter"),
+            "1 bunch basil" to Ingredient("1", "bunch", "basil"),
+            "2 pieces ginger" to Ingredient("2", "pieces", "ginger"),
+            "1 pkg yeast" to Ingredient("1", "pkg", "yeast"),
+            "2 garlic cloves" to Ingredient("2", "", "garlic cloves"),
+        )
+        for ((line, expected) in cases) {
+            assertEquals(listOf(expected), parseRecipeText("Title\nZutaten\n$line", id).ingredients, line)
         }
     }
 
