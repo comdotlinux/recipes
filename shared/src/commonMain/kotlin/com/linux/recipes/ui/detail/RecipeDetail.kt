@@ -61,6 +61,7 @@ import com.linux.recipes.ui.components.NoteBanner
 import com.linux.recipes.ui.components.PageGutter
 import com.linux.recipes.ui.components.RecipeIcons
 import com.linux.recipes.ui.components.SectionTitle
+import com.linux.recipes.ui.share.ShareActions
 import com.linux.recipes.ui.translate.LanguageAction
 import com.linux.recipes.ui.translate.TranslateViewModel
 import com.linux.recipes.ui.translate.TranslationHeader
@@ -137,6 +138,7 @@ fun RecipeDetailScreen(vm: RecipeDetailViewModel, onBack: () -> Unit, onEdit: ()
                 },
                 actions = {
                     if (recipe != null) {
+                        ShareActions(recipe)
                         translate?.let { LanguageAction(it) }
                         IconButton(onClick = onEdit) { Icon(RecipeIcons.Edit, stringResource(Res.string.detail_edit)) }
                         IconButton(onClick = { confirmDelete = true }, enabled = !vm.deleting) {

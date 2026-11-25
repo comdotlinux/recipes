@@ -145,6 +145,8 @@ class DefaultRecipeRepository(
     }
 
     private suspend fun downloadImages(pull: Pull.Done, token: String?): Boolean {
+        // One picture the server cannot hand out right now does not hold back the others (backup lists exactly what is missing).
+        var complete = true
         for (imageId in pull.missingImages) {
             when (val result = api.image(imageId)) {
                 is ApiResult.Ok -> mutex.withLock {
@@ -157,11 +159,11 @@ class DefaultRecipeRepository(
                     404 -> Unit
                     401 -> return false.also { unauthorized(token) }
                     // 429, 5xx and the rest: try again on the next sync.
-                    else -> return false
+                    else -> complete = false
                 }
             }
         }
-        return true
+        return complete
     }
 
     /**

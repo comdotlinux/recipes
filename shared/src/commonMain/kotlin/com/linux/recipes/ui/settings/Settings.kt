@@ -64,6 +64,7 @@ import com.linux.recipes.ui.components.ConfirmDialog
 import com.linux.recipes.ui.components.PageGutter
 import com.linux.recipes.ui.components.RecipeIcons
 import com.linux.recipes.ui.components.SectionTitle
+import com.linux.recipes.ui.backup.BackupSection
 import com.linux.recipes.ui.theme.AppearanceSection
 import com.linux.recipes.ui.theme.LocalAppearance
 import kotlinx.coroutines.launch
@@ -250,6 +251,7 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
                     onWithdraw = { confirmWithdraw = true },
                 )
             }
+            BackupSection()
             LocalAppearance.current?.let { AppearanceSection(it) }
             SectionTitle(stringResource(Res.string.settings_legal), Modifier.padding(top = 16.dp))
             Column(Modifier.fillMaxWidth().clip(MaterialTheme.shapes.large).background(MaterialTheme.colorScheme.surfaceContainerLow)) {
