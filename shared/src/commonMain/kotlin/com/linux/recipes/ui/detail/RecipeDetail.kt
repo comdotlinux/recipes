@@ -61,6 +61,7 @@ import com.linux.recipes.ui.components.NoteBanner
 import com.linux.recipes.ui.components.PageGutter
 import com.linux.recipes.ui.components.RecipeIcons
 import com.linux.recipes.ui.components.SectionTitle
+import com.linux.recipes.ui.share.ShareActions
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.stringResource
 import recipes.shared.generated.resources.Res
@@ -132,6 +133,7 @@ fun RecipeDetailScreen(vm: RecipeDetailViewModel, onBack: () -> Unit, onEdit: ()
                 },
                 actions = {
                     if (recipe != null) {
+                        ShareActions(recipe)
                         IconButton(onClick = onEdit) { Icon(RecipeIcons.Edit, stringResource(Res.string.detail_edit)) }
                         IconButton(onClick = { confirmDelete = true }, enabled = !vm.deleting) {
                             Icon(RecipeIcons.Delete, stringResource(Res.string.detail_delete))

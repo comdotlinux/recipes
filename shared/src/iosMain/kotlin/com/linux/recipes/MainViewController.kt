@@ -2,7 +2,9 @@ package com.linux.recipes
 
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.window.ComposeUIViewController
+import com.linux.recipes.data.ShareLinks
 import com.linux.recipes.platform.AppleAuthProvider
+import com.linux.recipes.ui.share.LocalSharing
 import com.linux.recipes.platform.KeychainSecureStore
 import com.linux.recipes.platform.RevenueCatBillingProvider
 import platform.Foundation.NSApplicationSupportDirectory
@@ -37,5 +39,13 @@ internal fun excludeCacheFromBackup(supportDir: NSURL): Boolean {
 }
 
 fun MainViewController(): UIViewController = ComposeUIViewController {
-    CompositionLocalProvider(LocalAppGraph provides graph) { App(graph) }
+    CompositionLocalProvider(LocalAppGraph provides graph, LocalSharing provides graph.sharing) { App(graph) }
+}
+
+/**
+ * Called by `iOSApp.swift` with every URL the app is opened with; SwiftUI hands universal links to `onOpenURL`.
+ * Anything but a share link `https://<host>/s#<token>` is ignored.
+ */
+fun openShareLink(url: String) {
+    ShareLinks.tokenFromUrl(url, ShareLinks.hostOf(AppConfig.API_BASE_URL))?.let { graph.sharing.incoming.value = it }
 }

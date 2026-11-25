@@ -64,6 +64,7 @@ import com.linux.recipes.ui.components.ConfirmDialog
 import com.linux.recipes.ui.components.PageGutter
 import com.linux.recipes.ui.components.RecipeIcons
 import com.linux.recipes.ui.components.SectionTitle
+import com.linux.recipes.ui.backup.BackupSection
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.stringResource
 import recipes.shared.generated.resources.Res
@@ -248,6 +249,7 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit) {
                     onWithdraw = { confirmWithdraw = true },
                 )
             }
+            BackupSection()
             SectionTitle(stringResource(Res.string.settings_legal), Modifier.padding(top = 16.dp))
             Column(Modifier.fillMaxWidth().clip(MaterialTheme.shapes.large).background(MaterialTheme.colorScheme.surfaceContainerLow)) {
                 val links = listOf(

@@ -2,6 +2,10 @@ package com.linux.recipes
 
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.linux.recipes.data.Api
+import com.linux.recipes.data.Backup
+import com.linux.recipes.data.DefaultShareRepository
+import com.linux.recipes.data.PdfDownload
+import com.linux.recipes.ui.share.SharingServices
 import com.linux.recipes.data.BillingRepository
 import com.linux.recipes.data.DefaultBillingRepository
 import com.linux.recipes.data.ConsentRepository
@@ -79,6 +83,21 @@ class AppGraph(
     )
     val imports: ImportRepository = importRepositoryImpl
 
+    // M5: sharing by link, PDF and backup.
+    private val shareRepositoryImpl = DefaultShareRepository(
+        api = api,
+        cacheDir = Path(filesDir, CACHE_DIR),
+        sync = { recipes.sync() },
+        currentToken = { tokens.token },
+        onUnauthorized = { session.signOut() },
+    )
+    val sharing = SharingServices(
+        shares = shareRepositoryImpl,
+        pdf = PdfDownload(api, currentToken = { tokens.token }, onUnauthorized = { session.signOut() }),
+        backup = Backup(api, recipes, currentToken = { tokens.token }, onUnauthorized = { session.signOut() }),
+        consent = consentRepositoryImpl,
+    )
+
     val session: SessionRepository = DefaultSessionRepository(
         api = api,
         auth = authProvider,
@@ -89,6 +108,7 @@ class AppGraph(
             importRepositoryImpl.clearLocal()
             consentRepositoryImpl.clearLocal()
             recipeRepositoryImpl.clearLocal()
+            shareRepositoryImpl.clearLocal()
         },
     )
 
