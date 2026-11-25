@@ -22,6 +22,7 @@ filekit = "0.17.1"
 androidx-credentials = "1.6.0"
 googleid = "1.2.1"
 mlkit-text-recognition = "16.0.1"
+revenuecat-kmp = "4.2.0"
 # Compose 1.12.1 (inside Compose Multiplatform 1.12.2) requires compileSdk 37 in its AAR metadata.
 android-compileSdk = "37"
 android-targetSdk = "36"
@@ -59,6 +60,8 @@ androidx-credentials-play-services-auth = { module = "androidx.credentials:crede
 googleid = { module = "com.google.android.libraries.identity.googleid:googleid", version.ref = "googleid" }
 # Bundled model (Latin script); the unbundled variant would download the model through Play Services.
 mlkit-text-recognition = { module = "com.google.mlkit:text-recognition", version.ref = "mlkit-text-recognition" }
+# RevenueCat's Kotlin Multiplatform SDK; since 3.0.0 it carries the native iOS SDK itself.
+revenuecat-purchases-core = { module = "com.revenuecat.purchases:purchases-kmp-core", version.ref = "revenuecat-kmp" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
