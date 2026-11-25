@@ -14,6 +14,8 @@ Every error has this body, with the HTTP status shown in the tables below:
 
 Codes used everywhere: `invalid_body` (400), `invalid_id` (400), `unauthenticated` (401), `not_found` (404), `rate_limited` (429).
 
+The `POST /v1/webhooks/revenuecat` route (Milestone M3) is called by RevenueCat, not by the app, and uses its own authorisation.
+
 ## Authentication
 
 - Header: `Authorization: Bearer v1.<userId>.<secret>.<tag>`. The app treats the token as opaque and never parses it.
@@ -182,6 +184,55 @@ The page calls whichever of the two exists. It loads script and frames only from
 ### Quota in `GET /me`
 
 `quota.freeImportUsed` is true while the free unit is consumed (it becomes false again after a refund). `quota.monthUsed` counts this UTC month's monthly units; `quota.monthLimit` is 30 and applies only while `entitlement.active` is true.
+
+## Milestone M3
+
+### Subscription
+
+One product (`monthly`) grants the RevenueCat entitlement `recipes_pro`. The server alone decides what a user may do; the app only shows what `GET /me` says.
+
+App side:
+- Right after `POST /session` succeeds, and before any purchase UI, the app calls the store SDK's log-in with our `userId` (`Purchases.logIn(userId)`). No purchase is possible while logged out of the SDK.
+- After a purchase, and after "Restore purchases" (the SDK's restore), the app calls `POST /entitlement/refresh` and shows the answer. On a new device the SDK log-in is enough; the server learns of purchases from RevenueCat.
+- The paywall appears when `POST /imports` answers 402 `quota_exhausted` and `entitlement.active` is false.
+
+| Route | Request | Success | Errors |
+|-------|---------|---------|--------|
+| `POST /entitlement/refresh` | none | 200 `EntitlementRefresh` | 401; 429 `rate_limited` (more than one call in 5 seconds, or the per-user write limit); 503 `billing_unavailable` (RevenueCat could not be reached; the server keeps retrying in the background and `GET /me` shows the result later) |
+
+```jsonc
+// EntitlementRefresh: the entitlement, quota and storage parts of GET /me, read from RevenueCat just now
+{
+  "entitlement": { "active": true, "expiresAt": "2026-12-25T10:00:00Z" },
+  "quota": { "freeImportUsed": true, "monthUsed": 3, "monthLimit": 30 },
+  "storage": { "usedBytes": 1048576, "capBytes": 524288000 }
+}
+```
+
+`entitlement` in `GET /me` and in `EntitlementRefresh`:
+- `active` is true while now is before the end of the subscription as RevenueCat reports it. A store grace period after a failed renewal counts as active until the grace period ends. A refund or revocation makes it false at once.
+- `expiresAt` is that end (the grace-period end when it is later), or null when `active` is false.
+- If RevenueCat cannot be reached, the stored entitlement is honoured until 24 hours after its end, then `active` is false.
+- `storage.capBytes` follows `active`: 524,288,000 while active, otherwise 52,428,800. A lapsed subscriber who stores more keeps everything; only new picture uploads answer 413 `storage_cap`.
+
+Quota and `402 quota_exhausted` on `POST /imports`:
+- The free lifetime import is used first, also by subscribers, and does not count against the 30.
+- Free user: 402 once the free import is used (the app shows the paywall).
+- Subscriber: 30 monthly units per UTC month (plus the free import if it is still unused); once `quota.monthUsed` is 30 the next import answers 402 (the app says the monthly allowance is used up until the 1st of the next month, UTC). `quota.monthUsed` counts per UTC month whatever the subscription did in between: lapsing and resubscribing in the same month keeps that month's count. A refund does not give used units back.
+- Failed imports on monthly units: a `failed` outcome (model or network error after 3 tries, or the 10-minute timeout) refunds a monthly unit but counts one attempt against the daily limit, so the eleventh counted attempt of a UTC day answers 429 `attempt_limit`. A `failed` outcome on the free unit still counts no attempt (the free unit has its own limit of 5 refunds). This bounds the model calls a subscriber can cause with failing imports to 10 jobs a day.
+
+### RevenueCat webhook
+
+Not called by the app. RevenueCat posts every subscription event to `POST /v1/webhooks/revenuecat`.
+
+- Authorisation: the dashboard's webhook "Authorization header value" is set to exactly the value of the Worker secret `REVENUECAT_WEBHOOK_SECRET`; the Worker compares the whole `Authorization` header with it in constant time before reading the body. Wrong or missing: 401 `unauthenticated` (and repeated failures from one IP: 429).
+- `Content-Length` is required (411 `length_required`); bodies over 64 KB answer 413 `body_too_large`; a body that is not JSON with `event.type` answers 400 `invalid_body`.
+- The payload is a trigger only: the Worker takes `event.app_user_id`, and for `TRANSFER` also `event.transferred_from` and `event.transferred_to`, keeps the values that have the shape of our user ids (43 base64url characters), and schedules a refresh from RevenueCat's REST record for each account that exists. Ids of other shapes and ids without an account are ignored; they never create storage. Answer: 200 `{ "received": true }`, before RevenueCat is asked.
+- The refresh runs in the user's object, retried with backoff (up to 10 tries) while RevenueCat is unreachable. Replays and out-of-order events only cause another read of the same record, so they are harmless. An account being deleted ignores webhooks.
+
+### Local environment only
+
+`POST /v1/testing/entitlement` with the session token and `{ "active": true }` or `{ "active": false }` switches the signed-in user's subscription without RevenueCat (a 30-day subscription, or none) and answers like `POST /entitlement/refresh`. It exists only in the local entry, which has no RevenueCat key; see `backend/README.md`.
 
 ## Module boundaries
 
