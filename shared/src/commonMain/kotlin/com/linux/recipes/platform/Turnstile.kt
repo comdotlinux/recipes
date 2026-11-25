@@ -1,6 +1,7 @@
 package com.linux.recipes.platform
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import io.ktor.http.URLProtocol
 import io.ktor.http.Url
@@ -20,6 +21,13 @@ import kotlinx.coroutines.sync.withLock
  */
 @Composable
 expect fun TurnstileView(baseUrl: String, onToken: (String) -> Unit, modifier: Modifier = Modifier, onError: () -> Unit = {})
+
+/**
+ * Null in the app, so the sign-in dialog shows the real [TurnstileView]. UI tests provide a double: on iOS the web
+ * view needs UIKit interop, which the Compose test harness cannot host. Same parameters as [TurnstileView].
+ */
+val LocalTurnstileView =
+    staticCompositionLocalOf<(@Composable (baseUrl: String, onToken: (String) -> Unit, modifier: Modifier, onError: () -> Unit) -> Unit)?> { null }
 
 /** Android: name of the JavaScript interface the Turnstile page calls. */
 const val TURNSTILE_ANDROID_BRIDGE = "RecipesBridge"
@@ -55,6 +63,10 @@ object TurnstilePolicy {
         val effectivePort = if (port == 0) URLProtocol.byName[protocol]?.defaultPort ?: return false else port
         return protocol == base.protocol.name && host == base.host && effectivePort == base.port
     }
+
+    /** The token of an iOS script message: a non-blank string from a trusted origin ([isTrustedMessageOrigin]), else null. */
+    fun messageToken(isMainFrame: Boolean, protocol: String, host: String, port: Int, baseUrl: String, body: Any?): String? =
+        (body as? String)?.takeIf { it.isNotBlank() && isTrustedMessageOrigin(isMainFrame, protocol, host, port, baseUrl) }
 }
 
 /** What the Turnstile step produced. */

@@ -71,6 +71,8 @@ class AndroidPlatformTest {
         val failing = AndroidSecureStore(dir) { throw java.security.ProviderException("keystore unavailable") }
         assertNull(failing.get("session_token"))
         assertFalse(File(dir, "session_token.bin").exists())
+        assertFalse("a failed write is reported, not thrown", failing.put("session_token", "v1.user.secret.tag"))
+        assertTrue("nothing is stored any more", failing.remove("session_token"))
     }
 
     @Test
