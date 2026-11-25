@@ -8,6 +8,7 @@ import com.linux.recipes.data.ImportRepository
 import com.linux.recipes.data.ImportSource
 import com.linux.recipes.data.ImportStart
 import com.linux.recipes.data.Ingredient
+import com.linux.recipes.data.LocalRead
 import com.linux.recipes.data.Quota
 import com.linux.recipes.data.ReportReason
 import com.linux.recipes.data.NewImage
@@ -35,6 +36,14 @@ class FakeImportRepository(job: ImportJobState? = null) : ImportRepository {
     val acknowledged = mutableListOf<String>()
     val reports = mutableListOf<Triple<String, ReportReason, String>>()
     var resumeCalls = 0
+    var readResult: LocalRead = LocalRead.Draft(localDraft, LOCAL_TEXT)
+    val reads = mutableListOf<ByteArray>()
+    var quotaCalls = 0
+
+    override suspend fun readOnDevice(jpeg: ByteArray): LocalRead {
+        reads += jpeg
+        return readResult
+    }
 
     override suspend fun start(source: ImportSource, jobId: String): ImportStart {
         starts += source to jobId
@@ -53,7 +62,7 @@ class FakeImportRepository(job: ImportJobState? = null) : ImportRepository {
         if (activeJob.value?.jobId == jobId) activeJob.value = null
     }
 
-    override suspend fun quota(): Quota? = quotaResult
+    override suspend fun quota(): Quota? = quotaResult.also { quotaCalls++ }
 
     override suspend fun report(jobId: String, reason: ReportReason, note: String): Boolean {
         reports += Triple(jobId, reason, note)
@@ -70,6 +79,17 @@ class FakeConsentRepository(given: Boolean = true) : ConsentRepository {
     override val state = MutableStateFlow<ConsentState>(if (given) ConsentState.Given(1) else ConsentState.NotGiven)
     var online = true
     var acceptCalls = 0
+
+    var refreshCalls = 0
+
+    /** A fake that starts as [ConsentState.Unknown] learns its state here, as the real one does from `GET /me`. */
+    var stateAfterRefresh: ConsentState? = null
+
+    override suspend fun refresh(): Boolean {
+        refreshCalls++
+        if (online) stateAfterRefresh?.let { state.value = it }
+        return online
+    }
 
     override suspend fun accept(): Boolean {
         acceptCalls++
@@ -95,6 +115,18 @@ val importedDraft = RecipeInput(
     sourceUrl = "https://example.com/pasta-e-ceci",
     sourceType = "url",
     language = "en",
+)
+
+/** What the phone read from a photo, and the draft the on-device parser made of it. */
+const val LOCAL_TEXT = "Pfannkuchen\n250 g Mehl\n3 Eier\nAlles zu einem Teig verrühren und ausbacken."
+
+val localDraft = RecipeInput(
+    id = "2a3b4c5d-6e7f-4a8b-9c0d-1e2f3a4b5c6d",
+    title = "Pfannkuchen",
+    ingredients = listOf(Ingredient("250", "g", "Mehl"), Ingredient("3", "", "Eier")),
+    steps = listOf("Alles zu einem Teig verrühren und ausbacken."),
+    sourceType = "photo",
+    language = "de",
 )
 
 const val USER_ID = "Qm9vay1ib3gtdGVzdC11c2VyLWlkLTAwMDAwMDAwMDA"

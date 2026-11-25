@@ -150,36 +150,58 @@ class ImportRepositoryTest {
     }
 
     @Test
-    fun photoWithEnoughReadableTextIsSentAsText() = runTest {
-        val text = "Kartoffelsalat\n1 kg Kartoffeln\nKochen!!!" // 40 characters
-        assertEquals(DefaultImportRepository.HANDOVER_MIN_CHARS, text.length)
+    fun readOnDeviceGivesADraftAndSendsNothingWithoutConsentOrSession() = runTest {
+        me = me.copy(consentVersion = null)
+        token = null
+        val text = "Pfannkuchen\n250 g Mehl\n3 Eier\nAlles verrühren und ausbacken."
         recognition = Recognition.Text("  $text \n")
-        repository().start(ImportSource.Photo(jpeg), jobId)
-        assertContentEquals(jpeg, recognized.single(), "the picture is read on the device first")
-        val sent = importRequests().single()
-        assertEquals("application/json", sent.body.contentType.toString())
-        assertEquals(jsonOf(Api.apiJson.encodeToString(ImportRequest.serializer(), ImportRequest("text", text = text))), jsonOf(sent.bodyText()))
+        val read = repository().readOnDevice(jpeg)
+        assertContentEquals(jpeg, recognized.single())
+        assertTrue(read is LocalRead.Draft)
+        assertEquals(text, read.text, "the trimmed text, kept for AI help later")
+        assertEquals("Pfannkuchen", read.draft.title)
+        assertEquals(listOf(Ingredient("250", "g", "Mehl"), Ingredient("3", "", "Eier")), read.draft.ingredients)
+        assertEquals("photo", read.draft.sourceType)
+        assertTrue(Regex("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$").matches(read.draft.id))
+        assertEquals(emptyList(), server.requests, "nothing leaves the phone")
+        assertNull(current.activeJob.value)
     }
 
     @Test
-    fun photoWithTooLittleTextOrUnreadableIsSentAsJpeg() = runTest {
+    fun readOnDeviceCallsShortOrMissingTextUnreadable() = runTest {
+        val exactly = "Kartoffelsalat\n1 kg Kartoffeln\nKochen!!!" // 40 characters
+        assertEquals(DefaultImportRepository.HANDOVER_MIN_CHARS, exactly.length)
+        recognition = Recognition.Text(" $exactly ")
+        assertTrue(repository().readOnDevice(jpeg) is LocalRead.Draft)
         for (result in listOf(Recognition.Text(" Kartoffelsalat\n1 kg Kartoffeln\nKochen!! ") /* 39 after trimming */, Recognition.Text("   "), Recognition.Unreadable)) {
-            server.requests.clear()
             recognition = result
-            repository().start(ImportSource.Photo(jpeg), jobId)
-            val sent = importRequests().single()
-            assertEquals("image/jpeg", sent.body.contentType.toString(), result.toString())
-            assertContentEquals(jpeg, sent.bodyBytes())
-            current.acknowledge(jobId)
+            assertEquals(LocalRead.Unreadable, repository().readOnDevice(jpeg), result.toString())
         }
+        assertEquals(emptyList(), server.requests)
     }
 
     @Test
-    fun linkIsSentAsUrlWithoutRecognition() = runTest {
-        repository().start(ImportSource.Link("https://example.org/kartoffelsalat"), jobId)
+    fun startSendsEachSourceAsItsKindWithoutRecognition() = runTest {
+        recognition = Recognition.Text("x".repeat(100))
+        val repo = repository()
+        repo.start(ImportSource.Text("Pfannkuchen\n250 g Mehl"), jobId)
+        val text = importRequests().single()
+        assertEquals("application/json", text.body.contentType.toString())
+        assertEquals(jsonOf(Api.apiJson.encodeToString(ImportRequest.serializer(), ImportRequest("text", text = "Pfannkuchen\n250 g Mehl"))), jsonOf(text.bodyText()))
+        repo.acknowledge(jobId)
+
+        server.requests.clear()
+        repo.start(ImportSource.Photo(jpeg), jobId)
+        val photo = importRequests().single()
+        assertEquals("image/jpeg", photo.body.contentType.toString())
+        assertContentEquals(jpeg, photo.bodyBytes())
+        repo.acknowledge(jobId)
+
+        server.requests.clear()
+        repo.start(ImportSource.Link("https://example.org/kartoffelsalat"), jobId)
         assertEquals(jsonOf(fixture("import_request_url.json")), jsonOf(importRequests().single().bodyText()))
         assertEquals(jobId, importRequests().single().headers["Idempotency-Key"])
-        assertTrue(recognized.isEmpty())
+        assertTrue(recognized.isEmpty(), "start never runs the recognizer")
     }
 
     @Test

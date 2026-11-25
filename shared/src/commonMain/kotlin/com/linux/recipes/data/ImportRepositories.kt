@@ -7,8 +7,17 @@ import kotlinx.coroutines.flow.StateFlow
 sealed interface ImportSource {
     data class Link(val url: String) : ImportSource
 
-    /** JPEG of at most 1.5 MB, longest side 2,048 px. The repository reads it on the device first. */
+    /** Text already read on the phone; the server only structures it (kind `text`). */
+    data class Text(val text: String) : ImportSource
+
+    /** A picture the phone could not read, JPEG of at most 1.5 MB, longest side 2,048 px; the server reads and structures it (kind `photo`). */
     class Photo(val jpeg: ByteArray) : ImportSource
+}
+
+/** A photo read on the phone: a draft and the recognised text it came from, or nothing usable. */
+sealed interface LocalRead {
+    data class Draft(val draft: RecipeInput, val text: String) : LocalRead
+    data object Unreadable : LocalRead
 }
 
 sealed interface ImportStart {
@@ -38,6 +47,9 @@ enum class ReportReason { WrongContent, Offensive, Other }
 
 interface ImportRepository {
     val activeJob: StateFlow<ImportJobState?>
+
+    /** Reads [jpeg] with the on-device recognizer and parser. Sends nothing; needs no consent and no session. */
+    suspend fun readOnDevice(jpeg: ByteArray): LocalRead
 
     /** `jobId` is the Idempotency-Key. The caller keeps it across retries after Offline, so nothing is charged twice. */
     suspend fun start(source: ImportSource, jobId: String): ImportStart

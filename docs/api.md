@@ -330,8 +330,16 @@ class NewImage(val id: String, val bytes: ByteArray)
 ```kotlin
 sealed interface ImportSource {
     data class Link(val url: String) : ImportSource
-    /** JPEG of at most 1.5 MB, longest side 2,048 px. The repository reads it on the device first. */
+    /** Text already read on the phone; the server only structures it (kind `text`). */
+    data class Text(val text: String) : ImportSource
+    /** A picture the phone could not read, JPEG of at most 1.5 MB, longest side 2,048 px; the server reads and structures it (kind `photo`). */
     class Photo(val jpeg: ByteArray) : ImportSource
+}
+
+/** A photo read on the phone: a draft and the recognised text it came from, or nothing usable. */
+sealed interface LocalRead {
+    data class Draft(val draft: RecipeInput, val text: String) : LocalRead
+    data object Unreadable : LocalRead
 }
 
 sealed interface ImportStart {
@@ -361,6 +369,8 @@ enum class ReportReason { WrongContent, Offensive, Other }
 
 interface ImportRepository {
     val activeJob: StateFlow<ImportJobState?>
+    /** Reads `jpeg` with the on-device recognizer and parser. Sends nothing; needs no consent and no session. */
+    suspend fun readOnDevice(jpeg: ByteArray): LocalRead
     /** `jobId` is the Idempotency-Key. The caller keeps it across retries after Offline, so nothing is charged twice. */
     suspend fun start(source: ImportSource, jobId: String): ImportStart
     /** Polls `GET /jobs/:id` every 2 seconds into `activeJob` until an outcome arrives; keeps retrying while offline. */
@@ -400,7 +410,7 @@ interface TextRecognizer {
 ```
 
 Rules:
-- `ImportSource.Photo`: the repository runs `TextRecognizer` first. Readable text is sent as kind `text`; `Unreadable`, or text shorter than the hand-over threshold, sends the JPEG as kind `photo`. The threshold is one constant in the repository and is set from the bake-off numbers.
+- A photo is read on the phone first, free and unlimited: `readOnDevice` runs `TextRecognizer` and a parser without any model and returns a draft, or `Unreadable` when there is no text or it is shorter than the hand-over threshold after trimming (one constant in the repository, set from the bake-off numbers). It sends nothing and needs no consent. `start` never runs the recognizer: `Text` is sent as kind `text` (AI help with a read photo), `Photo` as kind `photo` (AI reads a picture the phone could not), `Link` as kind `url`.
 - The app sends nothing to an import route before `ConsentState` is `Given` for `currentVersion`.
 - Signing out, and any 401, ends the open job locally and clears `activeJob`.
 - Whenever the repositories read `GET /me` and it names an `openJobId` while no job is active locally (started on another device, or before a reinstall), that job becomes `activeJob`. After a 409 `job_running`, `GET /me` is read once for this.

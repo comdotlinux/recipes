@@ -25,6 +25,7 @@ import com.linux.recipes.ui.edit.RecipeEditScreen
 import com.linux.recipes.ui.edit.RecipeEditViewModel
 import com.linux.recipes.ui.imports.ImportViewModel
 import com.linux.recipes.ui.imports.ReviewImportScreen
+import com.linux.recipes.ui.imports.ReviewLocalScreen
 import com.linux.recipes.ui.list.RecipeListScreen
 import com.linux.recipes.ui.list.RecipeListViewModel
 import com.linux.recipes.ui.settings.SettingsScreen
@@ -42,6 +43,8 @@ import kotlinx.serialization.Serializable
 @Serializable data object SettingsRoute
 /** The editor on the draft of the finished import [jobId]; saving creates a new recipe. */
 @Serializable data class ReviewImportRoute(val jobId: String)
+/** The editor on the draft of a photo read on the phone, held by the list's [ImportViewModel]; saving creates a new recipe. */
+@Serializable data object ReviewLocalRoute
 
 /**
  * The whole app below the theme. [imports] and [consent] are the AI import; without both, no import entry is shown. Signed out, only the sign-in screen exists; signing in or out
@@ -80,6 +83,33 @@ fun RecipesNavHost(
                 onSettings = { nav.navigate(SettingsRoute) },
                 imports = ai?.let { (i, c) -> viewModel { ImportViewModel(i, c) } },
                 onReview = { nav.navigate(ReviewImportRoute(it)) },
+                onReviewLocal = { nav.navigate(ReviewLocalRoute) },
+            )
+        }
+        composable<ReviewLocalRoute> { entry ->
+            // The list's view model holds the draft and runs "Tidy up with AI", so its status card shows on the list.
+            val list = remember(entry) { nav.getBackStackEntry<ListRoute>() }
+            val importVm = ai?.let { (i, c) -> viewModel(list) { ImportViewModel(i, c) } }
+            val draft = remember { importVm?.localDraft?.draft }
+            if (importVm == null || draft == null) {
+                LaunchedEffect(Unit) { nav.popBackStack() }
+                return@composable
+            }
+            val language = Locale.current.toLanguageTag()
+            ReviewLocalScreen(
+                vm = viewModel { RecipeEditViewModel(recipeRepository, null, language, draft) },
+                onTidyUp = {
+                    importVm.tidyUp()
+                    nav.popBackStack()
+                },
+                onSaved = { savedId ->
+                    importVm.closeLocalDraft()
+                    nav.navigate(DetailRoute(savedId)) { popUpTo<ReviewLocalRoute> { inclusive = true } }
+                },
+                onClose = {
+                    importVm.closeLocalDraft()
+                    nav.popBackStack()
+                },
             )
         }
         composable<ReviewImportRoute> { entry ->
