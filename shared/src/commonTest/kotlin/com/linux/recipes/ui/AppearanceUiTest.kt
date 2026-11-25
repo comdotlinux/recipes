@@ -49,7 +49,7 @@ class AppearanceUiTest : UiTest() {
     fun theThemeFollowsTheChoiceAtOnce() = runComposeUiTest {
         val store = AppearanceStore(file)
         var primary = Color.Unspecified
-        setContent { AppTheme(store, systemDark = false) { primary = MaterialTheme.colorScheme.primary } }
+        setScreen { AppTheme(store, systemDark = false) { primary = MaterialTheme.colorScheme.primary } }
         waitForIdle()
         assertEquals(Palettes.Herb.light.primary, primary)
 
@@ -66,7 +66,7 @@ class AppearanceUiTest : UiTest() {
     fun systemModeFollowsThePhoneAndAnUnknownPaletteFallsBackToHerb() = runComposeUiTest {
         val store = AppearanceStore(file).apply { set(Appearance("removed", ThemeMode.System)) }
         var primary = Color.Unspecified
-        setContent { AppTheme(store, systemDark = true) { primary = MaterialTheme.colorScheme.primary } }
+        setScreen { AppTheme(store, systemDark = true) { primary = MaterialTheme.colorScheme.primary } }
         waitForIdle()
         assertEquals(Palettes.Herb.dark.primary, primary)
     }
