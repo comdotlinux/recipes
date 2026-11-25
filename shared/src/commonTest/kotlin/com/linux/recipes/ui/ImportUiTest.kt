@@ -102,7 +102,7 @@ class ImportUiTest : UiTest() {
         val imports = FakeImportRepository()
         val vm = ImportViewModel(imports, FakeConsentRepository())
         var reviews = 0
-        setContent {
+        setScreen {
             RecipesTheme(darkTheme = false) {
                 RecipeListScreen(remember { RecipeListViewModel(FakeRecipeRepository(listOf(shakshuka))) }, {}, {}, {}, imports = vm, onReviewLocal = { reviews++ })
             }
@@ -129,7 +129,7 @@ class ImportUiTest : UiTest() {
         recipes: FakeRecipeRepository = FakeRecipeRepository(listOf(shakshuka)),
     ): Pair<Setup, () -> ImportViewModel> {
         lateinit var nav: NavHostController
-        setContent {
+        setScreen {
             RecipesTheme(darkTheme = false) {
                 nav = rememberNavController()
                 RecipesNavHost(FakeSessionRepository(signedIn = true), recipes, imports = imports, consent = consent, nav = nav)
