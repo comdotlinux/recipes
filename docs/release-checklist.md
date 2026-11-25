@@ -67,3 +67,12 @@ their sections below.
   Do: delete the app and install it again.
   Expect: the app starts signed out (the token is not restored from a device backup or the keychain of the old
   install).
+
+## Backend production deploy (M6)
+
+- [ ] **Legal texts filled.**
+  Do: paste the privacy policy and imprint from the legal-text generator into `backend/legal/` (README there), review the draft terms and fill the appeal contact.
+  Expect: `cd backend && bun run check:production` passes (it fails while any `OWNER-LEGAL-PLACEHOLDER` is left).
+- [ ] **Web deletion.**
+  Do: open `https://recipe.munich-tech.de/account/delete`, sign in with Apple, then with Google, on test accounts.
+  Expect: 202 and the account answers 401 in the app; the Apple token is revoked (Apple ID settings no longer list the app).
