@@ -72,6 +72,17 @@ Verified on 2026-11-24 at the same sources. Each library's Gradle module metadat
 
 Build settings that M1 adds to `gradle.properties` (compiled into `com.linux.recipes.AppConfig` by `:shared:generateAppConfig`): `API_BASE_URL` (default `https://recipe.munich-tech.de`, https and no trailing slash enforced) and `GOOGLE_SERVER_CLIENT_ID` (empty until the owner supplies the Google OAuth web client id).
 
+## Added in M2
+
+Verified on 2026-11-25.
+
+| Component | Coordinates | Exact version | Release date (UTC) | Source | Used by |
+|-----------|-------------|---------------|--------------------|--------|---------|
+| ML Kit text recognition v2, Latin script, bundled model | `com.google.mlkit:text-recognition` | 16.0.1 | 2024-08-07 (`Last-Modified` of the `.pom`) | https://dl.google.com/dl/android/maven2/com/google/mlkit/text-recognition/maven-metadata.xml (latest and release 16.0.1); API and the bundled versus unbundled choice from https://developers.google.com/ml-kit/vision/text-recognition/v2/android (read through Context7 `/websites/developers_google_ml-kit`, 2026-11-25) | `shared` androidMain (`platform/MlKitTextRecognizer.kt`) |
+| Apple Vision (`VNRecognizeTextRequest`, `VNImageRequestHandler`) | system framework, Kotlin/Native platform library `platform.Vision` | iOS 13.0 or newer (deployment target 15.0) | | https://developer.apple.com/documentation/vision/vnrecognizetextrequest and https://developer.apple.com/documentation/vision/vndetectedobjectobservation/boundingbox (normalised box, origin lower left), read 2026-11-25 | `shared` iosMain (`platform/VisionTextRecognizer.kt`) |
+
+The bundled ML Kit model is linked into the app (Google lists about 4 MB per script and architecture) and needs no Play Services download; the unbundled variant `com.google.android.gms:play-services-mlkit-text-recognition` (19.0.2) would download the model on first use and is not used. ML Kit's documentation names API level 23 as the minimum; the app's minSdk is 24.
+
 ## iOS project template
 
 `iosApp/iosApp.xcodeproj/project.pbxproj`, `iosApp/iosApp/Info.plist` and `iosApp/Configuration/Config.xcconfig` are adapted from the official JetBrains template https://github.com/Kotlin/KMP-App-Template at commit `6b6d09e4f3f5e845116422d59b658791ed6149c6` (read 2026-11-24), licensed Apache License 2.0 (https://github.com/Kotlin/KMP-App-Template/blob/main/LICENSE). Changes: preview and asset-catalog entries removed, both Swift files merged into `iOSApp.swift`, deployment target 15.0, bundle id `$(APP_ID)` (`com.linux.recipes`, the same value as `APP_ID` in `gradle.properties`; the Kotlin package stays `com.linux.recipes`), display name `$(APP_NAME)` (`Recipes`) through `CFBundleDisplayName`, `OTHER_LDFLAGS = -framework Shared`, `x86_64` excluded for the simulator (only `iosSimulatorArm64` is built), shared scheme `iosApp` added (the template ships none).

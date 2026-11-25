@@ -138,7 +138,7 @@ class DefaultRecipeRepository(
         }
         // Recipes before the cursor: a crash in between only repeats this pull.
         store(byId.values)
-        cache.writeSettings(RecipeCache.Settings(cursor = since))
+        cache.updateSettings { it.copy(cursor = since) }
         val referenced = referencedImages()
         cache.removeImagesExcept(referenced)
         return Pull.Done(referenced.filter { cache.imagePath(it) == null }, generation)

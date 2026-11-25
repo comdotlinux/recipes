@@ -2,15 +2,21 @@ package com.linux.recipes
 
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.linux.recipes.data.Api
+import com.linux.recipes.data.ConsentRepository
+import com.linux.recipes.data.DefaultConsentRepository
+import com.linux.recipes.data.DefaultImportRepository
 import com.linux.recipes.data.DefaultRecipeRepository
 import com.linux.recipes.data.DefaultSessionRepository
+import com.linux.recipes.data.ImportRepository
 import com.linux.recipes.data.RecipeCache
 import com.linux.recipes.data.RecipeRepository
 import com.linux.recipes.data.SessionRepository
 import com.linux.recipes.data.TokenStore
 import com.linux.recipes.platform.AuthProvider
 import com.linux.recipes.platform.SecureStore
+import com.linux.recipes.platform.TextRecognizer
 import com.linux.recipes.platform.TurnstileGate
+import com.linux.recipes.platform.platformTextRecognizer
 import io.ktor.client.HttpClient
 import kotlinx.io.buffered
 import kotlinx.io.files.FileSystem
@@ -27,25 +33,50 @@ class AppGraph(
     authProvider: AuthProvider,
     httpClient: HttpClient = Api.httpClient(),
     val baseUrl: String = AppConfig.API_BASE_URL,
+    val textRecognizer: TextRecognizer = platformTextRecognizer(),
 ) {
     val turnstile = TurnstileGate()
     private val tokens = TokenStore(secureStore.also { clearStaleTokenOnFirstLaunch(Path(filesDir), it) })
     private val api = Api(httpClient, baseUrl) { tokens.token }
 
+    private val cache = RecipeCache(Path(filesDir, CACHE_DIR))
+
     private val recipeRepositoryImpl: DefaultRecipeRepository = DefaultRecipeRepository(
         api = api,
-        cache = RecipeCache(Path(filesDir, CACHE_DIR)),
+        cache = cache,
         currentToken = { tokens.token },
         onUnauthorized = { session.signOut() },
     )
     val recipes: RecipeRepository = recipeRepositoryImpl
+
+    private val consentRepositoryImpl = DefaultConsentRepository(
+        api = api,
+        currentToken = { tokens.token },
+        onUnauthorized = { session.signOut() },
+    )
+    val consent: ConsentRepository = consentRepositoryImpl
+
+    private val importRepositoryImpl = DefaultImportRepository(
+        api = api,
+        cache = cache,
+        consent = consentRepositoryImpl,
+        recognizer = textRecognizer,
+        currentToken = { tokens.token },
+        onUnauthorized = { session.signOut() },
+    )
+    val imports: ImportRepository = importRepositoryImpl
 
     val session: SessionRepository = DefaultSessionRepository(
         api = api,
         auth = authProvider,
         turnstile = turnstile,
         tokens = tokens,
-        clearLocal = { recipeRepositoryImpl.clearLocal() },
+        clearLocal = {
+            // The open import job first: the recipe wipe then removes the whole cache directory.
+            importRepositoryImpl.clearLocal()
+            consentRepositoryImpl.clearLocal()
+            recipeRepositoryImpl.clearLocal()
+        },
     )
 
     companion object {

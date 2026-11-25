@@ -6,6 +6,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.io.buffered
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
@@ -28,7 +33,7 @@ class RecipeCacheTest {
     fun recipesAndCursorRoundTripWithoutTemporaryFiles() {
         val recipes = listOf(recipe(ID_A, 2, imageIds = listOf(IMG_1)), recipe(ID_B, 1))
         cache.writeRecipes(recipes)
-        cache.writeSettings(RecipeCache.Settings(cursor = 9))
+        cache.updateSettings { it.copy(cursor = 9) }
         cache.writeRecipes(recipes.take(1))
 
         assertEquals(recipes.take(1), RecipeCache(dir).readRecipes())
@@ -51,7 +56,7 @@ class RecipeCacheTest {
 
     @Test
     fun unreadableRecipesResetTheCursor() {
-        cache.writeSettings(RecipeCache.Settings(cursor = 5))
+        cache.updateSettings { it.copy(cursor = 5) }
         SystemFileSystem.sink(Path(dir, "recipes.json")).buffered().use { it.write("not json".encodeToByteArray()) }
         assertEquals(emptyList(), cache.readRecipes())
         assertEquals(0, cache.readSettings().cursor)
@@ -71,9 +76,23 @@ class RecipeCacheTest {
     }
 
     @Test
+    fun interleavedSettingsUpdatesFromSeveralThreadsLoseNothing() = runTest {
+        cache.writeRecipes(emptyList()) // so the cursor is trusted
+        withContext(Dispatchers.Default) {
+            // Sync (cursor) and the import repository (job id) update the same file at the same time.
+            val cursorWrites = (1..100).map { launch { cache.updateSettings { it.copy(cursor = it.cursor + 1) } } }
+            val jobWrites = (1..100).map { n -> launch { cache.updateSettings { it.copy(importJobId = "job-$n", importJobKind = "text") } } }
+            (cursorWrites + jobWrites).joinAll()
+        }
+        val settings = RecipeCache(dir).readSettings()
+        assertEquals(100, settings.cursor, "no cursor increment was lost")
+        assertTrue(settings.importJobId!!.startsWith("job-"), "the job id survived every cursor write")
+    }
+
+    @Test
     fun wipeRemovesEveryFile() {
         cache.writeRecipes(listOf(recipe(ID_A, 1)))
-        cache.writeSettings(RecipeCache.Settings(3))
+        cache.updateSettings { it.copy(cursor = 3) }
         cache.writeImage(IMG_1, byteArrayOf(1))
         cache.writeImage(IMG_2, byteArrayOf(2))
 

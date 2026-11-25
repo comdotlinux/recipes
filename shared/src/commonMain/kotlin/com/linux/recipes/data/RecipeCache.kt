@@ -1,5 +1,7 @@
 package com.linux.recipes.data
 
+import kotlin.concurrent.atomics.AtomicBoolean
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlinx.io.buffered
 import kotlinx.io.files.FileSystem
 import kotlinx.io.files.Path
@@ -10,12 +12,13 @@ import kotlinx.serialization.builtins.ListSerializer
 
 /**
  * Offline copy of the user's data under [root] (a directory inside the app's files directory):
- * `recipes.json`, `settings.json` (sync cursor) and `images/<imageId>`.
+ * `recipes.json`, `settings.json` (sync cursor, open import job) and `images/<imageId>`.
  * Every file is written to a temporary name first and then renamed, so a crash never leaves half a file.
  */
 class RecipeCache(private val root: Path, private val fs: FileSystem = SystemFileSystem) {
+    /** [importJobId] and [importJobKind]: the open import job, kept so it survives an app restart. */
     @Serializable
-    data class Settings(val cursor: Long = 0)
+    data class Settings(val cursor: Long = 0, val importJobId: String? = null, val importJobKind: String? = null)
 
     private val recipesFile = Path(root, "recipes.json")
     private val settingsFile = Path(root, "settings.json")
@@ -28,11 +31,30 @@ class RecipeCache(private val root: Path, private val fs: FileSystem = SystemFil
         writeAtomic(recipesFile, json.encodeToString(ListSerializer(Recipe.serializer()), recipes).encodeToByteArray())
 
     /** The cursor is only trusted when the recipes it belongs to can be read; otherwise sync starts from 0. */
-    fun readSettings(): Settings =
-        if (read(recipesFile, ListSerializer(Recipe.serializer())) == null) Settings() else read(settingsFile, Settings.serializer()) ?: Settings()
+    fun readSettings(): Settings {
+        val stored = read(settingsFile, Settings.serializer()) ?: Settings()
+        return if (read(recipesFile, ListSerializer(Recipe.serializer())) == null) stored.copy(cursor = 0) else stored
+    }
 
-    fun writeSettings(settings: Settings) =
-        writeAtomic(settingsFile, json.encodeToString(Settings.serializer(), settings).encodeToByteArray())
+    /**
+     * The only way to change the settings: read, change, write under one lock, so the recipe sync (cursor) and the
+     * import repository (job) never overwrite each other's field, from whatever thread they run. Not suspending,
+     * because `ImportRepository.acknowledge` is not.
+     */
+    @OptIn(ExperimentalAtomicApi::class)
+    fun updateSettings(change: (Settings) -> Settings) {
+        // shortcut: a spin lock, held for one small file write; common code has no blocking lock without adding
+        // atomicfu as a direct dependency. Upgrade to a real lock if updates ever get slow or frequent.
+        while (!settingsLock.compareAndSet(expectedValue = false, newValue = true)) Unit
+        try {
+            writeAtomic(settingsFile, json.encodeToString(Settings.serializer(), change(readSettings())).encodeToByteArray())
+        } finally {
+            settingsLock.store(false)
+        }
+    }
+
+    @OptIn(ExperimentalAtomicApi::class)
+    private val settingsLock = AtomicBoolean(false)
 
     fun imagePath(imageId: String): String? = imageFile(imageId)?.takeIf { fs.exists(it) }?.toString()
 
