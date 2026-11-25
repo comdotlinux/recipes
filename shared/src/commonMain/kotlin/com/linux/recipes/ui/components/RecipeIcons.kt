@@ -15,6 +15,10 @@ import androidx.compose.ui.unit.dp
  */
 object RecipeIcons {
     val Search = line("search", "M10.5 4.5a6 6 0 1 0 0 12a6 6 0 1 0 0 -12z M15 15l5 5")
+    val Language = line(
+        "language",
+        "M12 3.5a8.5 8.5 0 1 0 0 17a8.5 8.5 0 1 0 0 -17z M3.5 12h17 M12 3.5c-2.8 2.6 -2.8 14.4 0 17 M12 3.5c2.8 2.6 2.8 14.4 0 17",
+    )
     val Add = line("add", "M12 5v14 M5 12h14")
     val Back = line("back", "M19 12H5 M11 6l-6 6l6 6")
     val Close = line("close", "M6 6l12 12 M18 6L6 18")

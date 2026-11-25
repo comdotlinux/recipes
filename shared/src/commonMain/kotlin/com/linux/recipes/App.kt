@@ -8,17 +8,23 @@ import com.linux.recipes.data.ConsentRepository
 import com.linux.recipes.data.ImportRepository
 import com.linux.recipes.data.RecipeRepository
 import com.linux.recipes.data.SessionRepository
+import com.linux.recipes.data.TranslationRepository
+import com.linux.recipes.ui.theme.AppTheme
+import com.linux.recipes.ui.theme.AppearanceStore
 import com.linux.recipes.platform.TurnstileGate
 import com.linux.recipes.ui.RecipesNavHost
 import com.linux.recipes.ui.paywall.LocalBilling
 import com.linux.recipes.ui.signin.TurnstileChallenge
-import com.linux.recipes.ui.theme.RecipesTheme
 
 /** The app as the platform entry points start it. */
 @Composable
 fun App(graph: AppGraph, darkTheme: Boolean = isSystemInDarkTheme()) {
     val (imports, consent) = aiImport(graph)
-    App(graph.session, graph.recipes, darkTheme, TurnstileChallenge(graph.turnstile, graph.baseUrl), imports, consent, graph.billing)
+    App(
+        graph.session, graph.recipes, darkTheme, TurnstileChallenge(graph.turnstile, graph.baseUrl), imports, consent, graph.billing,
+        translationRepository = graph.translations,
+        appearance = graph.appearance,
+    )
 }
 
 /** The AI import repositories of the running app. Tests pass fakes, or null to hide the import entry. */
@@ -26,7 +32,8 @@ private fun aiImport(graph: AppGraph): Pair<ImportRepository?, ConsentRepository
 
 /**
  * The app on explicit repositories; tests pass fakes and, when sign-in needs it, a [TurnstileChallenge].
- * [billingRepository] null behaves like a device without a store.
+ * [billingRepository] null behaves like a device without a store. [translationRepository] null hides the language
+ * action; [appearance] null keeps the default palette and [darkTheme], and hides the Appearance section.
  */
 @Composable
 fun App(
@@ -37,10 +44,12 @@ fun App(
     importRepository: ImportRepository? = null,
     consentRepository: ConsentRepository? = null,
     billingRepository: BillingRepository? = null,
+    translationRepository: TranslationRepository? = null,
+    appearance: AppearanceStore? = null,
 ) {
-    RecipesTheme(darkTheme) {
+    AppTheme(appearance, darkTheme) {
         CompositionLocalProvider(LocalBilling provides billingRepository) {
-            RecipesNavHost(sessionRepository, recipeRepository, turnstile, importRepository, consentRepository)
+            RecipesNavHost(sessionRepository, recipeRepository, turnstile, importRepository, consentRepository, translationRepository)
         }
     }
 }

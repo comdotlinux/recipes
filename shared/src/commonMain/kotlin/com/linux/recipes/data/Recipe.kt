@@ -1,5 +1,7 @@
 package com.linux.recipes.data
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 
 /**
@@ -26,6 +28,10 @@ data class Recipe(
     /** BCP 47 tag. */
     val language: String = "",
     val imageIds: List<String> = emptyList(),
+    /** Milestone M4, server to app only: absent when the recipe has no translation, so it is never written as `[]`. */
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val translations: List<RecipeTranslation> = emptyList(),
 )
 
 /** What the client sends: a [Recipe] without `rev`, `deleted` and `updatedAt`. */

@@ -29,6 +29,7 @@ import com.linux.recipes.platform.LocalTurnstileView
 import com.linux.recipes.ui.edit.LocalPictureActions
 import com.linux.recipes.ui.edit.PictureActions
 import com.linux.recipes.ui.signin.TurnstileChallenge
+import com.linux.recipes.ui.theme.AppearanceStore
 
 class RecordingUriHandler : UriHandler {
     val opened = mutableListOf<String>()
@@ -61,10 +62,15 @@ fun ComposeUiTest.setApp(
     imports: FakeImportRepository? = null,
     consent: FakeConsentRepository? = null,
     turnstile: TurnstileChallenge? = null,
+    translations: FakeTranslationRepository? = null,
+    appearance: AppearanceStore? = null,
 ) {
     setScreen {
         CompositionLocalProvider(LocalUriHandler provides uriHandler) {
-            App(session, recipes, darkTheme, turnstile, importRepository = imports, consentRepository = consent)
+            App(
+                session, recipes, darkTheme, turnstile, importRepository = imports, consentRepository = consent,
+                translationRepository = translations, appearance = appearance,
+            )
         }
     }
 }
