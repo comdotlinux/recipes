@@ -81,10 +81,10 @@ describe("Turnstile test keys", () => {
 		const required = (block: unknown) => (block as { secrets: { required: string[] } }).secrets.required;
 		for (const name of ["production", "staging"]) {
 			expect(JSON.stringify(config.env[name])).not.toContain("dev-only-");
-			expect(required(config.env[name])).toEqual(["USER_ID_PEPPER", "SERVER_KEY", "TURNSTILE_SECRET", "REVENUECAT_API_KEY", "REVENUECAT_WEBHOOK_SECRET", "REVENUECAT_V2_API_KEY", "APPLE_P8"]);
+			expect(required(config.env[name])).toEqual(["USER_ID_PEPPER", "SERVER_KEY", "TURNSTILE_SECRET", "REVENUECAT_API_KEY", "REVENUECAT_WEBHOOK_SECRET", "REVENUECAT_V2_API_KEY", "APPLE_P8", "CF_API_TOKEN_READ", "ALERT_WEBHOOK_URL"]);
 		}
 		expect(JSON.stringify(config.vars)).not.toContain("dev-only-");
-		expect(required(config)).toEqual(["USER_ID_PEPPER", "SERVER_KEY", "TURNSTILE_SECRET", "REVENUECAT_API_KEY", "REVENUECAT_WEBHOOK_SECRET", "REVENUECAT_V2_API_KEY", "APPLE_P8"]);
+		expect(required(config)).toEqual(["USER_ID_PEPPER", "SERVER_KEY", "TURNSTILE_SECRET", "REVENUECAT_API_KEY", "REVENUECAT_WEBHOOK_SECRET", "REVENUECAT_V2_API_KEY", "APPLE_P8", "CF_API_TOKEN_READ", "ALERT_WEBHOOK_URL"]);
 	});
 
 	it("only env.local carries Cloudflare's always-pass test keys", () => {

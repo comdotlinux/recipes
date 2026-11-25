@@ -592,7 +592,9 @@ export function createApi(options: { testProvider?: TestProvider } = {}) {
 		return c.json({ received: true });
 	});
 
-	app.notFound((c) => fail(c, 404, "not_found", "no such route"));
+	// The Worker runs first for every path (wrangler.jsonc run_worker_first), so the API and admin checks always apply;
+	// what is not an API route is a static file from public/.
+	app.notFound((c) => (new URL(c.req.url).pathname.startsWith("/v1/") ? fail(c, 404, "not_found", "no such route") : c.env.ASSETS.fetch(c.req.raw)));
 
 	return app;
 }

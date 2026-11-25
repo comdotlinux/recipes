@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import inputFixture from "../../../contract/fixtures/recipe_input.json";
 import suspendedFixture from "../../../contract/fixtures/error_suspended.json";
 import meSuspendedFixture from "../../../contract/fixtures/me_suspended.json";
+import type { SuspensionReason } from "../../src/user-do";
 import { type Session, call, inObject, interceptOutbound, signIn, userStub, uuid } from "./helpers";
 
 beforeEach(() => {
@@ -15,7 +16,7 @@ afterEach(() => {
 
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]);
 const body = (v: unknown) => ({ body: JSON.stringify(v), headers: { "content-type": "application/json" } });
-const suspend = (userId: string, reason: "abusive_content" | null = "abusive_content") => userStub(userId).setSuspended(reason, "operator@example.org");
+const suspend = (userId: string, reason: SuspensionReason | null = "abusive_content") => userStub(userId).setSuspended(reason, "operator@example.org");
 
 async function withRecipeAndImage(): Promise<{ s: Session; recipeId: string; imageId: string }> {
 	const s = await signIn();

@@ -1,0 +1,19 @@
+[
+  { "event": "account_created", "a": null, "b": null, "n": 4 },
+  { "event": "request", "a": "recipes", "b": "200", "n": 120 },
+  { "event": "auth_failure", "a": "invalid_token", "b": null, "n": 3 },
+  { "event": "auth_failure", "a": "webhook_unauthorized", "b": null, "n": 2 },
+  { "event": "import_outcome", "a": "import_url", "b": "done", "n": 9 },
+  { "event": "import_outcome", "a": "import_text", "b": "guard_block", "n": 2 },
+  { "event": "import_outcome", "a": "translation", "b": "done", "n": 5 },
+  { "event": "screen", "a": "safe", "b": null, "n": 6 },
+  { "event": "pdf", "a": "rendered", "b": null, "n": 7 },
+  { "event": "share", "a": "created", "b": null, "n": 8 },
+  { "event": "report", "a": "import_result", "b": "offensive", "n": 1 },
+  { "event": "share_report", "a": "offensive", "b": "reference", "n": 1 },
+  { "event": "quota_denied", "a": "quota_exhausted", "b": null, "n": 11 },
+  { "event": "entitlement_refresh", "a": "webhook", "b": "unavailable", "n": 5 },
+  { "event": "entitlement_mismatch", "a": "daily", "b": null, "n": 1 },
+  { "event": "account_deletion", "a": "erased", "b": null, "n": 2 },
+  { "event": "internal_error", "a": "erase_refused", "b": null, "n": 1 }
+]

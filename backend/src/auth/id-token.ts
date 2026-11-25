@@ -78,7 +78,7 @@ async function fetchKeys(url: string): Promise<{ jwks: JSONWebKeySet; lifetime: 
 }
 
 /** The provider's key set; `refresh` asks for a new set because a token named an unknown key id. */
-async function providerKeys(url: string, now: number, refresh: boolean): Promise<JSONWebKeySet | null> {
+export async function providerKeys(url: string, now: number, refresh: boolean): Promise<JSONWebKeySet | null> {
 	const cached = jwksCache.get(url);
 	if (cached && !refresh && now < cached.fetchedAt + cached.lifetime) return cached.jwks;
 	if (refresh && now - (lastFetchAttempt.get(url) ?? -Infinity) < REFRESH_COOLDOWN_MS) return null;

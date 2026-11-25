@@ -1080,6 +1080,8 @@ export class UserDO extends DurableObject<Env> {
 			return null;
 		}
 		if (now < Number(this.meta("entitlement_at") ?? "0")) return this.storedEntitlement();
+		// A scheduled re-read that changes the state means the webhook that should have changed it never came (plan 4.10).
+		if ((trigger === "daily" || trigger === "stale") && fresh.active !== this.storedEntitlement().active) systemEvent(this.env, { event: "entitlement_mismatch", trigger });
 		this.setMeta("entitlement", JSON.stringify(fresh));
 		this.setMeta("entitlement_at", String(now));
 		this.sql.exec("DELETE FROM meta WHERE key = 'entitlement_failed_at'");
@@ -1162,6 +1164,44 @@ export class UserDO extends DurableObject<Env> {
 		});
 		this.event({ event: "admin_action", action: reason ? "suspend" : "unsuspend", reason: reason ?? "none" });
 		return { status: 200, body: { state: reason ? "suspended" : "active", reason } };
+	}
+
+	/**
+	 * Admin call (plan 4.12): counters and states only, never recipe text, pictures or provider identity. Reading does
+	 * not create storage; an id without an account answers 404, an erased one its tombstone state only.
+	 */
+	adminSummary(): Result {
+		const state = accountState(this.sql);
+		if (state === null) return error(404, "not_found", "no account");
+		if (state === "tombstone") return { status: 200, body: { state, tombstoneUntil: isoTime(Number(this.meta("tombstone_until"))) } };
+		const now = Date.now();
+		const e = this.storedEntitlement();
+		const created = this.meta("created_at");
+		return {
+			status: 200,
+			body: {
+				state,
+				suspensionReason: this.meta("suspension_reason"),
+				createdAt: created === null ? null : isoTime(Number(created)),
+				entitlement: { active: entitled(e, now, true), expiresAt: endOf(e) === null ? null : isoTime(endOf(e)!) },
+				monthUsed: this.monthUsed(now),
+				freeImportUsed: this.meta("free_import_used_at") !== null,
+				freeImportRefunds: Number(this.meta("free_import_refunds") ?? "0"),
+				storageBytes: this.usedBytes(),
+				recipes: this.sql.exec<{ n: number }>("SELECT count(*) AS n FROM recipes WHERE deleted = 0").one().n,
+				pictures: this.sql.exec<{ n: number }>("SELECT count(*) AS n FROM images").one().n,
+				sessions: this.sql.exec<{ n: number }>("SELECT count(*) AS n FROM sessions").one().n,
+				recentJobs: this.sql
+					.exec<{ kind: string; status: string; created_at: number }>("SELECT kind, status, created_at FROM jobs ORDER BY created_at DESC LIMIT 20")
+					.toArray()
+					.map((j) => ({ kind: j.kind, status: j.status, createdAt: isoTime(j.created_at) })),
+				requests: this.sql.exec<{ day: string; key: string; count: number }>("SELECT day, key, count FROM daily_counters ORDER BY day DESC, key").toArray(),
+				audit: this.sql
+					.exec<{ at: number; actor: string; action: string; reason: string | null }>("SELECT at, actor, action, reason FROM audit ORDER BY id DESC LIMIT 50")
+					.toArray()
+					.map((a) => ({ at: isoTime(a.at), actor: a.actor, action: a.action, reason: a.reason })),
+			},
+		};
 	}
 
 	// ---- account deletion (plan 4.7, docs/api.md Milestone M6) ----
