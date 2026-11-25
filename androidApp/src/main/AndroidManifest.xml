@@ -24,7 +24,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" />
-                <data android:host="recipe.munich-tech.de" />
+                <data android:host="${appLinksHost}" />
                 <data android:path="/s" />
             </intent-filter>
         </activity>
