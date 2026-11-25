@@ -58,7 +58,11 @@ export const APPLE_CODE_TTL_MS = 5 * 60 * 1000;
 /** External deletion steps, each retried until done (plan 4.7); the erasure runs once all are done. */
 export const DELETION_STEPS = ["revenuecat", "apple"] as const;
 
-/** An Sign in with Apple authorization code and the client id it was issued to (bundle id, or Services ID on the web). */
+/** Suspension grounds (plan 4.9; the terms of use name them): the code is shown to the user and sent with every 403. */
+export const SUSPENSION_REASONS = ["illegal_content", "abusive_content", "quota_abuse", "payment_abuse"] as const;
+export type SuspensionReason = (typeof SUSPENSION_REASONS)[number];
+
+/** A Sign in with Apple authorization code and the client id it was issued to (bundle id, or Services ID on the web). */
 export type AppleCode = { code: string; clientId: string; redirectUri?: string };
 
 /** Plan 4.6: active means now is before the end (grace period included); while RevenueCat is unreachable, 24 hours longer. */
@@ -167,9 +171,22 @@ export class UserDO extends DurableObject<Env> {
 		return true;
 	}
 
-	protected async run(group: string, secretHash: string, op: (now: number) => Result | Promise<Result>, write = false): Promise<Result> {
+	/**
+	 * The routes a suspended user keeps (plan 4.4): GET /me, GET /recipes, GET /images/:id, DELETE /session and
+	 * DELETE /account (web deletion does not use a session), so a backup export and erasure stay possible.
+	 */
+	private runExempt(group: string, secretHash: string, op: (now: number) => Result | Promise<Result>): Promise<Result> {
+		return this.run(group, secretHash, op, false, true);
+	}
+
+	protected async run(group: string, secretHash: string, op: (now: number) => Result | Promise<Result>, write = false, suspendedOk = false): Promise<Result> {
 		const now = Date.now();
 		if (!this.authenticate(secretHash, now)) return error(401, "unauthenticated", "missing, unknown or expired session");
+		if (!suspendedOk && this.meta("state") === "suspended") {
+			this.event({ event: "request", group, status: 403 });
+			const reason = this.meta("suspension_reason") ?? "other";
+			return { status: 403, body: { error: { code: "account_suspended", message: `account suspended: ${reason}`, reason } } };
+		}
 		// Per-user write limit, applied only after the session is accepted; the object id stands for the user.
 		const limited = write && !(await this.env.RL_USER.limit({ key: this.ctx.id.toString() })).success;
 		// The await above lets other requests in; a DELETE /session in between must win.
@@ -263,14 +280,14 @@ export class UserDO extends DurableObject<Env> {
 	}
 
 	deleteSession(secretHash: string): Promise<Result> {
-		return this.run("session", secretHash, () => {
+		return this.runExempt("session", secretHash, () => {
 			this.sql.exec("DELETE FROM sessions WHERE token_hash = ?", secretHash);
 			return { status: 204 };
 		});
 	}
 
 	me(secretHash: string, userId: string): Promise<Result> {
-		return this.run("me", secretHash, async (now) => {
+		return this.runExempt("me", secretHash, async (now) => {
 			const billing = this.billingView(await this.entitledNow(now), now);
 			const state = this.meta("state") ?? "active";
 			const consent = this.meta("consent_version");
@@ -302,7 +319,7 @@ export class UserDO extends DurableObject<Env> {
 	// ---- recipes ----
 
 	listRecipes(secretHash: string, since: number): Promise<Result> {
-		return this.run("recipes", secretHash, () => {
+		return this.runExempt("recipes", secretHash, () => {
 			if (since > 0 && since < Number(this.meta("purged_rev") ?? "0")) {
 				return error(410, "cursor_expired", "deletion markers after this cursor were purged; pull with since=0");
 			}
@@ -399,7 +416,7 @@ export class UserDO extends DurableObject<Env> {
 	}
 
 	getImage(secretHash: string, imageId: string): Promise<Result> {
-		return this.run("images", secretHash, () => {
+		return this.runExempt("images", secretHash, () => {
 			const row = this.sql.exec<{ mime: string; bytes: ArrayBuffer }>("SELECT mime, bytes FROM images WHERE id = ?", imageId).toArray()[0];
 			if (!row) return error(404, "not_found", "image not found");
 			return { status: 200, bytes: row.bytes, headers: {
@@ -1123,6 +1140,30 @@ export class UserDO extends DurableObject<Env> {
 		if (!(await this.refreshEntitlement(now, "webhook"))) throw new Error("subscription service unavailable");
 	}
 
+	// ---- suspension (plan 4.4, 4.12; docs/api.md Milestone M6) ----
+
+	/**
+	 * Admin call, reached by user id from the admin host only: suspends with a reason code, or lifts the suspension when
+	 * `reason` is null. Writes one audit row here and one admin_action metric. Jobs already running finish and are
+	 * charged; nothing new starts while suspended. An id without an account (or a deleting or erased one) answers 404.
+	 */
+	setSuspended(reason: SuspensionReason | null, actor: string): Result {
+		if (!this.live()) return error(404, "not_found", "no account");
+		const now = Date.now();
+		this.ctx.storage.transactionSync(() => {
+			if (reason === null) {
+				this.setMeta("state", "active");
+				this.sql.exec("DELETE FROM meta WHERE key = 'suspension_reason'");
+			} else {
+				this.setMeta("state", "suspended");
+				this.setMeta("suspension_reason", reason);
+			}
+			this.sql.exec("INSERT INTO audit (at, actor, action, reason) VALUES (?, ?, ?, ?)", now, actor, reason ? "suspend" : "unsuspend", reason);
+		});
+		this.event({ event: "admin_action", action: reason ? "suspend" : "unsuspend", reason: reason ?? "none" });
+		return { status: 200, body: { state: reason ? "suspended" : "active", reason } };
+	}
+
 	// ---- account deletion (plan 4.7, docs/api.md Milestone M6) ----
 
 	/** Keeps an Apple authorization code until it is exchanged for the refresh token that deletion revokes. */
@@ -1153,7 +1194,7 @@ export class UserDO extends DurableObject<Env> {
 
 	/** DELETE /account: the state changes first, so every other call answers 401 at once; the steps run as alarm tasks. */
 	deleteAccount(secretHash: string): Promise<Result> {
-		return this.run("account", secretHash, async (now) => {
+		return this.runExempt("account", secretHash, async (now) => {
 			await this.startDeletion(now);
 			return { status: 202, body: { state: "deleting" } };
 		});

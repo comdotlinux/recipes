@@ -53,6 +53,10 @@ export const MIGRATIONS: Migration[] = [
 			"CREATE TABLE share_accepts (share_id TEXT NOT NULL, recipient_hash TEXT NOT NULL, accepted_at INTEGER NOT NULL, PRIMARY KEY (share_id, recipient_hash))",
 		);
 	},
+	// v6 (M6): admin actions on this account (plan 4.12); actor is the operator's Access email, never the user's
+	(sql) => {
+		sql.exec("CREATE TABLE audit (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, reason TEXT)");
+	},
 ];
 
 // GLOB, not LIKE: "_" is a wildcard in LIKE. _cf_* tables are internal to the runtime.

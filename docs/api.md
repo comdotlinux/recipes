@@ -339,7 +339,7 @@ Rules:
 - Picture checks are limited to 30 model calls per user and UTC day (each check of one picture is one call, also when the share then fails with 422 or 503); beyond that `POST /recipes/:id/shares` answers 429 `share_limit` until the next day.
 - Accept checks the recipient's recipe count and recipe text first, so a recipient at one of these limits gets 409 or 413 without using up one of the link's ten recipient places.
 - Translations count toward the 20 MB of recipe text (`recipe_storage_cap`); a translation that would pass it ends as `invalid` and is refunded.
-- Not decided yet: suspended users can still create, open, accept and report links; this is revisited when suspension is built (Milestone M6).
+- Suspension (decided in Milestone M6): a suspended user cannot create, revoke, open or accept links or report one (403 `account_suspended`, see "Milestone M6"); links of a suspended owner answer 410 `share_gone` to everyone.
 
 ### PDF
 

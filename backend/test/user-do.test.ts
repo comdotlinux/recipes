@@ -9,7 +9,7 @@ const tables = (sql: SqlStorage) =>
 		.map((r) => r.name);
 
 const stub = (name: string) => env.USER_DO.get(env.USER_DO.idFromName(name));
-const ALL = ["attempts", "daily_counters", "images", "jobs", "meta", "recipes", "reports", "sessions", "share_accepts", "shares", "tasks", "translations", "usage", "used_nonces"];
+const ALL = ["attempts", "audit", "daily_counters", "images", "jobs", "meta", "recipes", "reports", "sessions", "share_accepts", "shares", "tasks", "translations", "usage", "used_nonces"];
 
 /** Turns the object back into the M0 (v1) schema with some rows, as a storage fixture. */
 function v1Fixture(storage: DurableObjectStorage) {

@@ -15,7 +15,9 @@ export type UserEvent =
 	// screen: safe | not_safe | unavailable. Codes only.
 	| { event: "share" | "pdf" | "screen"; outcome: string }
 	// account deletion (plan 4.7): started | erased; written before the erasure, a tombstone writes nothing.
-	| { event: "account_deletion"; outcome: string };
+	| { event: "account_deletion"; outcome: string }
+	// admin (plan 4.12): suspend | unsuspend, with the reason code; the operator is recorded only in the object's audit table.
+	| { event: "admin_action"; action: string; reason: string };
 
 /** No content, no URLs, no user text: only the event, fixed codes and a duration. */
 export function userEvent(env: Env, metricsId: string, e: UserEvent): void {
@@ -30,6 +32,8 @@ export function userEvent(env: Env, metricsId: string, e: UserEvent): void {
 						? [e.event, e.kind, e.reason]
 						: e.event === "entitlement_refresh"
 							? [e.event, e.trigger, e.outcome]
+							: e.event === "admin_action"
+								? [e.event, e.action, e.reason]
 							: e.event === "share" || e.event === "pdf" || e.event === "screen" || e.event === "account_deletion"
 								? [e.event, e.outcome]
 								: [e.event];
