@@ -6,6 +6,7 @@ import createdFixture from "../../../contract/fixtures/share_created.json";
 import previewFixture from "../../../contract/fixtures/share_preview.json";
 import shareReportFixture from "../../../contract/fixtures/report_share.json";
 import tokenBodyFixture from "../../../contract/fixtures/share_token_body.json";
+import listFixture from "../../../contract/fixtures/shares_list.json";
 import { SCREEN_PROMPT } from "../../src/ai/screen-image";
 import { newSessionToken } from "../../src/auth";
 import { SHARE_RECIPIENT_LIMIT, derivedId, newShareId, newShareToken, openReportReference, openShareToken, reportReference } from "../../src/share";
@@ -175,6 +176,56 @@ describe("creating and revoking links", () => {
 		expect([gone.status, await code(gone)]).toEqual([410, "share_gone"]);
 		expect((await call(`/shares/${newShareId()}`, { method: "DELETE", token: a.token })).status).toBe(404);
 		expect(await code(await call("/shares/xyz", { method: "DELETE", token: a.token }))).toBe("invalid_id");
+	});
+});
+
+describe("GET /shares", () => {
+	type List = typeof listFixture;
+	const listOf = async (s: Session) => {
+		const res = await call("/shares", { token: s.token });
+		expect(res.status).toBe(200);
+		return (await res.json()) as List;
+	};
+
+	it("lists the caller's working links newest first, with recipients and no tokens", async () => {
+		const a = await owner();
+		const id = await recipe(a);
+		const first = await created(a, id);
+		const second = await created(a, id);
+		const b = await signIn();
+		await accept(b, second.token);
+		const list = await listOf(a);
+		expect(Object.keys(list.shares[0])).toEqual(Object.keys(listFixture.shares[0]));
+		expect(list.shares.map((x) => [x.shareId, x.recipeId, x.recipients, x.expiresAt])).toEqual([
+			[second.shareId, id, 1, second.expiresAt],
+			[first.shareId, id, 0, first.expiresAt],
+		]);
+		expect(JSON.stringify(list)).not.toContain(first.token.slice(0, 20));
+		// Only the caller's own links.
+		expect((await listOf(b)).shares).toEqual([]);
+	});
+
+	it("leaves out expired and revoked links and links of a deleted recipe", async () => {
+		const a = await owner();
+		const id = await recipe(a);
+		const expired = await created(a, id);
+		const revoked = await created(a, id);
+		const kept = await created(a, id);
+		const gone = await recipe(a);
+		await created(a, gone);
+		await sql(a, "UPDATE shares SET expires_at = ? WHERE share_id = ?", Date.now() - 1, expired.shareId);
+		await call(`/shares/${revoked.shareId}`, { method: "DELETE", token: a.token });
+		await call(`/recipes/${gone}`, { method: "DELETE", token: a.token });
+		expect((await listOf(a)).shares.map((x) => x.shareId)).toEqual([kept.shareId]);
+	});
+
+	it("a suspended owner's list is empty; an account being deleted gets 401", async () => {
+		const a = await owner();
+		await created(a, await recipe(a));
+		await setMeta(a, "state", "suspended");
+		expect((await listOf(a)).shares).toEqual([]);
+		await setMeta(a, "state", "deleting");
+		expect((await call("/shares", { token: a.token })).status).toBe(401);
 	});
 });
 

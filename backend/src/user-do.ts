@@ -760,6 +760,26 @@ export class UserDO extends DurableObject<Env> {
 		return null;
 	}
 
+	/**
+	 * GET /shares: the owner's links that still work (not expired, not revoked, recipe not deleted), newest first, with
+	 * the number of recipients. No tokens: the server keeps none. A suspended owner's links answer 410, so none is listed.
+	 */
+	listShares(secretHash: string): Promise<Result> {
+		return this.run("shares", secretHash, (now) => {
+			if (this.meta("state") !== "active") return { status: 200, body: { shares: [] } };
+			const rows = this.sql
+				.exec<{ share_id: string; recipe_id: string; created_at: number; expires_at: number; recipients: number }>(
+					`SELECT s.share_id, s.recipe_id, s.created_at, s.expires_at, (SELECT count(*) FROM share_accepts a WHERE a.share_id = s.share_id) AS recipients
+					 FROM shares s WHERE s.revoked = 0 AND s.expires_at > ? AND EXISTS (SELECT 1 FROM recipes r WHERE r.id = s.recipe_id AND r.deleted = 0)
+					 ORDER BY s.created_at DESC, s.rowid DESC`,
+					now,
+				)
+				.toArray();
+			const shares = rows.map((r) => ({ shareId: r.share_id, recipeId: r.recipe_id, createdAt: isoTime(r.created_at), expiresAt: isoTime(r.expires_at), recipients: r.recipients }));
+			return { status: 200, body: { shares } };
+		});
+	}
+
 	/** DELETE /shares/:shareId: the owner revokes a link; a revoked link answers 410 to everyone. */
 	deleteShare(secretHash: string, shareId: string): Promise<Result> {
 		return this.run("shares", secretHash, () => {

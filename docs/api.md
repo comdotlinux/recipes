@@ -300,6 +300,7 @@ Only a subscriber can create a link (402 `subscription_required` otherwise). Any
 | Route | Request | Success | Errors |
 |-------|---------|---------|--------|
 | `POST /recipes/:id/shares` | none | 201 `ShareCreated` | 400 `invalid_id`; 402 `subscription_required`; 403 `consent_required` (only when the recipe has pictures: they are checked by the model first); 404 (not this user's recipe); 422 `picture_rejected` (a picture failed the check; the app says which recipe and asks to remove the picture); 429 `share_limit` (10 new links, or 30 picture checks, per UTC day); 429 `rate_limited`; 503 `screening_unavailable` (try again later) |
+| `GET /shares` | none | 200 `ShareList` | 401 |
 | `DELETE /shares/:shareId` | none | 204 | 400 `invalid_id`; 404 (not this user's share) |
 | `POST /shares/open` | `ShareTokenBody` | 200 `SharePreview` | 400 `invalid_body`; 404 `not_found` (not a valid link, or unknown); 409 `own_share`; 410 `share_gone`; 411 `length_required` |
 | `POST /shares/accept` | `ShareTokenBody` | 200 `Recipe` (the copy) | 400 `invalid_body`; 404; 409 `own_share`; 409 `recipe_limit`; 410 `share_gone`; 411 `length_required`; 413 `recipe_storage_cap`; 413 `storage_cap`; 422 `share_unreadable` (no readable text left, see below) |
@@ -320,6 +321,13 @@ Only a subscriber can create a link (402 `subscription_required` otherwise). Any
   "imageCount": 1,                                // pictures the copy will get
   "expiresAt": "2026-12-25T10:00:00Z"
 }
+// ShareList (fixture shares_list.json): the caller's links that still work, newest first
+{
+  "shares": [
+    { "shareId": "3f2a9c4d5e6b7a8f9c0d1e2f3a4b5c6d", "recipeId": "<recipe id>", "createdAt": "2026-11-25T10:00:00Z",
+      "expiresAt": "2026-12-25T10:00:00Z", "recipients": 2 }      // recipients: how many accepted so far (at most 10)
+  ]
+}
 // ShareTokenBody (fixture share_token_body.json)
 { "shareToken": "<token>" }
 // ShareReport
@@ -334,7 +342,7 @@ Rules:
 - The copy counts against the recipient's limits: recipe count (409 `recipe_limit`), recipe text (413 `recipe_storage_cap`) and picture storage (413 `storage_cap`). When it does not fit, nothing is copied; the app tells the user to free space and try again.
 - Pictures: when a link is created, every picture of the recipe that has not been checked yet is checked once by a vision model (safe or not); a picture with new bytes is checked again. Only pictures that passed are ever shared, so a picture added to the recipe after the link was made is not part of the copy until a new link is made. A recipe without pictures needs no AI consent to be shared.
 - A report of a shared recipe revokes the link at once. Reporting the same link again answers 204 and changes nothing.
-- The response of `POST /recipes/:id/shares` is the only time the app sees the token; the owner keeps `shareId` to revoke the link. There is no list of an owner's links in this milestone.
+- The response of `POST /recipes/:id/shares` is the only time the app sees the token; the owner keeps `shareId` to revoke the link. `GET /shares` lists the caller's links that still work (not expired, not revoked, recipe not deleted), so the app can show and revoke links made on another device; it never contains tokens, because the server keeps none and cannot recreate them. A suspended owner's list is empty (their links answer 410); an account being deleted gets 401 like every route.
 - A link keeps working until it expires even if the owner's subscription lapses meanwhile: it was made while subscribed. Only making a new link needs the subscription.
 - Picture checks are limited to 30 model calls per user and UTC day (each check of one picture is one call, also when the share then fails with 422 or 503); beyond that `POST /recipes/:id/shares` answers 429 `share_limit` until the next day.
 - Accept checks the recipient's recipe count and recipe text first, so a recipient at one of these limits gets 409 or 413 without using up one of the link's ten recipient places.
